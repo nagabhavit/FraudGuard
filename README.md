@@ -46,7 +46,7 @@ refreshes what the hot path reads. Full design: [`docs/architecture.md`](docs/ar
 | Layer | Choice | Why |
 | --- | --- | --- |
 | API | FastAPI | Async I/O suits a service that mostly waits on Redis and gRPC; Pydantic gives validation and OpenAPI for free |
-| System of record | PostgreSQL 16 | ACID on financial records; JSONB for feature snapshots; native partitioning |
+| System of record | PostgreSQL 16 + SQLAlchemy 2.0 (async) + Alembic | ACID on financial records; JSONB for feature snapshots; native partitioning; async ORM keeps the hot path off a blocking driver (ADR-0005) |
 | Online store | Redis 7 | Sub-millisecond reads; sorted sets and HyperLogLog are exactly the right primitives for velocity and cardinality |
 | Event log | Kafka 3.9 (KRaft) | Durable, replayable, ordered per key — replay is what lets features be rebuilt |
 | Schema governance | Confluent Schema Registry | BACKWARD compatibility enforced at the broker, not just in CI |
@@ -119,6 +119,18 @@ uv add --package fraudguard-gateway X # add a dependency to one service
 There is intentionally no Makefile. With uv these commands are short enough
 that a wrapper would add indirection without saving typing.
 
+### Database migrations
+
+Alembic and its driver are a dev-only `migrate` dependency group (ADR-0005) --
+they never ship inside a service image, so every migration command needs
+`--group migrate` explicitly:
+
+```bash
+uv run --all-packages --group migrate alembic -c db/alembic.ini upgrade head
+uv run --all-packages --group migrate alembic -c db/alembic.ini downgrade -1
+uv run --all-packages --group migrate alembic -c db/alembic.ini revision --autogenerate -m "message"
+```
+
 ---
 
 ## Quality gates
@@ -182,6 +194,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0002](docs/adr/0002-compose-file-at-repository-root.md) | Compose file at the repository root |
 | [0003](docs/adr/0003-uv-workspace-single-lockfile.md) | uv workspace with a single lockfile |
 | [0004](docs/adr/0004-quality-gates.md) | Split quality gates between pre-commit and CI |
+| [0005](docs/adr/0005-database-access-layer.md) | Async SQLAlchemy for the app, sync Alembic for migrations, in a shared `fraudguard-db` package |
 
 ---
 

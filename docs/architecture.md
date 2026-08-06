@@ -31,7 +31,7 @@ from scratch.
 | Local infrastructure (Postgres, Redis, Kafka, Schema Registry) | Running, `docker-compose.yml` |
 | `fraudguard-common` (settings, structured logging, error taxonomy) | Implemented |
 | Gateway service | App factory, health probes, request-context middleware, containerized — no scoring logic yet |
-| Database schema / migrations | Not started |
+| Database schema / migrations | Implemented — `fraudguard-db` (SQLAlchemy models), Alembic migrations in `db/migrations/`; gateway's `/health/ready` checks real Postgres connectivity |
 | Kafka topics / Avro schemas | Not started |
 | Feature store (Redis primitives) | Not started |
 | Stream aggregator | Not started |
@@ -49,7 +49,7 @@ scope is not yet fully specified.
 | --- | --- | --- |
 | 2 | `fraudguard-common` core | Settings base, structured JSON logging, typed error taxonomy |
 | 4 | Gateway skeleton | FastAPI app factory, `/health/live` + `/health/ready`, request-id middleware, Dockerfile, wired into Compose |
-| 5 | Database layer | SQLAlchemy models + Alembic migrations: `transactions`, `decisions`, `labels` |
+| 5 | Database layer | SQLAlchemy models + Alembic migrations: `transactions`, `decisions`, `labels` (ADR-0005) |
 | 6 | Kafka topics + schemas | Topic creation, Avro schemas in Schema Registry, gateway publishes to the cold path |
 | 7 | Feature store | Redis velocity/aggregate primitives (sorted sets, HyperLogLog), a feature-service API |
 | 8 | Stream aggregator | Kafka consumer maintaining Redis features from the transaction stream |
