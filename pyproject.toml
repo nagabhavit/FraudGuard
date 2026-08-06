@@ -30,6 +30,7 @@ members = ["services/*", "libs/*"]
 [tool.uv.sources]
 # Workspace members resolve to the local path rather than PyPI.
 fraudguard-common = { workspace = true }
+fraudguard-db = { workspace = true }
 
 # PEP 735 dependency groups. These are development-only by construction and
 # can never leak into a production image, which is why they are used here
@@ -50,10 +51,19 @@ test = [
     "pytest-cov>=7.0,<8",
     "httpx2>=2.9,<3",
 ]
+# Alembic and its sync driver are migration-time tools, never imported by a
+# running service -- see ADR-0005. Kept in their own group, not `dev`, so
+# `uv sync --all-packages --all-groups` (used for mypy/pre-commit) still
+# installs them, but no service's runtime dependency set ever does.
+migrate = [
+    "alembic>=1.13,<2",
+    "psycopg[binary]>=3.2,<4",
+]
 dev = [
     { include-group = "lint" },
     { include-group = "typecheck" },
     { include-group = "test" },
+    { include-group = "migrate" },
     "pre-commit>=4.4,<5",
 ]
 
@@ -101,7 +111,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["fraudguard_common", "gateway"]
+known-first-party = ["fraudguard_common", "fraudguard_db", "gateway"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -153,7 +163,7 @@ markers = [
 branch = true
 # Measure the installed packages by import name, not by directory. Directory
 # paths break once code runs from site-packages inside a container.
-source_pkgs = ["fraudguard_common", "gateway"]
+source_pkgs = ["fraudguard_common", "fraudguard_db", "gateway"]
 omit = ["*/tests/*"]
 
 [tool.coverage.report]

@@ -176,6 +176,14 @@ services:
       - "${GATEWAY_PORT:-8000}:8000"
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Overrides .env's POSTGRES_HOST=localhost -- inside the compose
+      # network the gateway reaches Postgres by service name, not by the
+      # host-side port mapping.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-fraudguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraudguard}
+      POSTGRES_DB: ${POSTGRES_DB:-fraudguard}
     # No healthcheck: block here -- the image declares its own HEALTHCHECK
     # in services/gateway/Dockerfile, unlike the vendored images above, which
     # ship none.

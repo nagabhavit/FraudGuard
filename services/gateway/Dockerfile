@@ -17,6 +17,7 @@ WORKDIR /app
 # `uv sync` is cached across builds that only change application code.
 COPY pyproject.toml uv.lock ./
 COPY libs/fraudguard-common/pyproject.toml libs/fraudguard-common/pyproject.toml
+COPY libs/fraudguard-db/pyproject.toml libs/fraudguard-db/pyproject.toml
 COPY services/gateway/pyproject.toml services/gateway/pyproject.toml
 
 # --no-install-project defers installing the workspace members themselves
@@ -25,6 +26,7 @@ COPY services/gateway/pyproject.toml services/gateway/pyproject.toml
 RUN uv sync --frozen --package fraudguard-gateway --no-dev --no-install-project
 
 COPY libs/fraudguard-common libs/fraudguard-common
+COPY libs/fraudguard-db libs/fraudguard-db
 COPY services/gateway services/gateway
 
 # --no-editable: the image ships a real installed wheel, not a path link back
