@@ -48,7 +48,7 @@ test = [
     "pytest>=9.0.3,<10", # 8.x has PYSEC-2026-1845
     "pytest-asyncio>=1.2,<2",
     "pytest-cov>=7.0,<8",
-    "httpx>=0.28,<1",
+    "httpx2>=2.9,<3",
 ]
 dev = [
     { include-group = "lint" },

@@ -1,15 +1,15 @@
 # =============================================================================
-# FraudGuard local development stack -- infrastructure only.
+# FraudGuard local development stack.
 # =============================================================================
 #
-# Application services (gateway, dashboard) are added in a later milestone,
-# once their Dockerfiles exist. A compose file that references a missing
-# Dockerfile fails the entire `up`, so they are deliberately absent.
+# The dashboard is added once it has a Dockerfile (Milestone 12+). A compose
+# file that references a missing Dockerfile fails the entire `up`, so it is
+# deliberately absent until then.
 #
-# Every stateful service declares a real healthcheck. Application services will
-# depend on `condition: service_healthy`, not `service_started` -- without that
-# distinction the gateway races Postgres on a cold start and dies on first
-# connect.
+# Every stateful service declares a real healthcheck. Application services
+# depend on `condition: service_healthy`, not `service_started` -- without
+# that distinction the gateway races Postgres on a cold start and dies on
+# first connect.
 # =============================================================================
 
 name: fraudguard
@@ -149,6 +149,36 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+    logging: *default-logging
+    networks: [fraudguard]
+
+  # ---------------------------------------------------------------------------
+  # Gateway -- transaction authorization API and hot-path orchestrator
+  # ---------------------------------------------------------------------------
+  gateway:
+    build:
+      # Root context, not services/gateway/ -- the Dockerfile copies both its
+      # own directory and the shared libs/ tree. See ADR-0002.
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    container_name: fraudguard-gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # No healthcheck: block here -- the image declares its own HEALTHCHECK
+    # in services/gateway/Dockerfile, unlike the vendored images above, which
+    # ship none.
     logging: *default-logging
     networks: [fraudguard]
 

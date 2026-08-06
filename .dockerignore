@@ -1,0 +1,38 @@
+# Build context hygiene. Docker sends everything not listed here to the
+# daemon before evaluating a single instruction, so an unfiltered .venv or
+# .git tree makes every build slow and can leak local state into an image.
+
+.git/
+.github/
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+node_modules/
+dashboard/dist/
+dashboard/.vite/
+
+.env
+.env.*
+!.env.example
+
+docs/
+*.md
+!README.md
+
+ml/models/*
+ml/datasets/*
+mlruns/
+
+infra/.terraform/
+*.tfstate
+*.tfstate.*
