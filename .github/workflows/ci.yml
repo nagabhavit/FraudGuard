@@ -101,8 +101,13 @@ jobs:
           enable-cache: true
       - name: Install workspace
         run: uv sync --all-packages --group test
+      # Excludes `integration`-marked tests: they need a real Postgres, which
+      # this job does not have. Those run in the `integration` job below,
+      # against an actual service container, not a mock.
       - name: Pytest with coverage
-        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
+        run: >
+          uv run pytest -m "not integration" --cov --cov-report=term-missing
+          --cov-report=xml
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -111,6 +116,37 @@ jobs:
           path: coverage.xml
           retention-days: 7
           if-no-files-found: error
+
+  integration:
+    name: Integration tests (Postgres)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # A real Postgres, not a mock -- the whole point of `fraudguard-db`'s
+    # integration suite is to catch a schema/driver mismatch that a mock
+    # would paper over silently.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fraudguard
+          POSTGRES_PASSWORD: fraudguard
+          POSTGRES_DB: fraudguard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fraudguard -d fraudguard"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install workspace
+        run: uv sync --all-packages --group test
+      - name: Pytest (integration only)
+        run: uv run pytest -m integration -v
 
   hooks:
     name: Pre-commit hooks
@@ -135,7 +171,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [lockfile, lint, typecheck, test, hooks]
+    needs: [lockfile, lint, typecheck, test, integration, hooks]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:

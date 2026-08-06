@@ -2,7 +2,7 @@
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `ci.yml` | push to main, pull request | Lockfile, lint, type check, tests, pre-commit hooks |
+| `ci.yml` | push to main, pull request | Lockfile, lint, type check, tests, Postgres integration tests, pre-commit hooks |
 | `security.yml` | push, pull request, weekly | Dependency audit and secret scanning |
 
 ## Branch protection
