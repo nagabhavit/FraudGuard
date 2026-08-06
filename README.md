@@ -7,8 +7,11 @@
 Distributed real-time fraud detection platform. Transactions are scored inline
 in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 
-> **Status: repository foundation.** Workspace, tooling, and local
-> infrastructure only. No application source code yet.
+> **Status: early build.** Workspace, tooling, and local infrastructure are in
+> place. The gateway exists as a running skeleton (app factory, structured
+> logging, health probes, containerized) with no scoring logic yet — that
+> lands with the feature store, model service, and Kafka pipeline in the
+> milestones tracked in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -71,8 +74,8 @@ git clone <your-repo-url> fraudguard && cd fraudguard
 cp .env.example .env
 
 uv sync --all-packages --all-groups      # reproducible venv from uv.lock
-docker compose up -d      # postgres, redis, kafka, schema registry
-docker compose ps         # all four must report (healthy)
+docker compose up -d      # postgres, redis, kafka, schema registry, gateway
+docker compose ps         # all five must report (healthy)
 ```
 
 Verify the stack:
@@ -83,6 +86,13 @@ docker compose exec redis redis-cli ping
 docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server localhost:9092 --list
 curl -fsS http://localhost:8081/subjects
+curl -fsS http://localhost:8000/health/live
+```
+
+Run the gateway locally without Docker (auto-reloads on change):
+
+```bash
+uv run --package fraudguard-gateway uvicorn gateway.asgi:app --reload --port 8000
 ```
 
 Tear down:
