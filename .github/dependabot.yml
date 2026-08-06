@@ -1,0 +1,60 @@
+# Automated dependency updates.
+#
+# Grouping matters: ungrouped, a monorepo produces a wall of single-dependency
+# pull requests that nobody reviews properly. Grouped by ecosystem and by
+# patch/minor, each pull request is a single reviewable unit.
+
+version: 2
+
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      python-patch-and-minor:
+        update-types: [patch, minor]
+    commit-message:
+      prefix: "build(deps)"
+      prefix-development: "build(deps-dev)"
+    labels: [dependencies, python]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci(deps)"
+    labels: [dependencies, ci]
+
+  # Activated once the dashboard has a package.json.
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 5
+    groups:
+      npm-patch-and-minor:
+        update-types: [patch, minor]
+    commit-message:
+      prefix: "build(deps)"
+    labels: [dependencies, dashboard]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "build(deps)"
+    labels: [dependencies, docker]

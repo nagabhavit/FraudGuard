@@ -1,0 +1,148 @@
+# =============================================================================
+# Pre-commit: the fast local gate.
+# =============================================================================
+#
+# Division of responsibility with CI:
+#
+#   pre-commit  -- runs in seconds on changed files. Catches the cheap, common
+#                  mistakes before they cost a CI round-trip.
+#   CI          -- runs on everything, from a clean checkout. This is the
+#                  authoritative gate and the thing branch protection enforces.
+#
+# Pre-commit is a convenience, never a substitute. Anything that must not reach
+# main is enforced in CI, because pre-commit can be bypassed with --no-verify.
+#
+# Install:  uv run pre-commit install --install-hooks
+#           uv run pre-commit install --hook-type commit-msg
+# =============================================================================
+
+default_install_hook_types: [pre-commit, commit-msg]
+default_language_version:
+  python: python3.12
+
+# Fail fast on the cheapest hooks so a whitespace error does not wait behind
+# a thirty-second type check.
+fail_fast: false
+
+repos:
+  # ---------------------------------------------------------------------------
+  # File hygiene and accident prevention
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        # Model artifacts belong in S3 with a registry row pointing at them.
+        # This is the backstop for when someone bypasses .gitignore with -f.
+        args: [--maxkb=500]
+      - id: detect-private-key
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: forbid-submodules
+
+  # ---------------------------------------------------------------------------
+  # Python lint and format
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.6 # keep in sync with the `lint` dependency group
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # ---------------------------------------------------------------------------
+  # Lockfile drift
+  # ---------------------------------------------------------------------------
+  # Editing a pyproject.toml without re-locking produces a repository whose
+  # lockfile no longer describes it. CI would catch this, but catching it here
+  # saves the round-trip.
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.9.9
+    hooks:
+      - id: uv-lock
+
+  # ---------------------------------------------------------------------------
+  # Secret detection
+  # ---------------------------------------------------------------------------
+  # detect-private-key above only finds PEM blocks. Gitleaks finds cloud keys,
+  # tokens, and connection strings. A credential committed once is compromised
+  # forever, because rewriting history does not un-publish it.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # ---------------------------------------------------------------------------
+  # GitHub Actions workflow linting
+  # ---------------------------------------------------------------------------
+  # Workflow syntax errors are otherwise only discovered by pushing and waiting.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
+
+  # ---------------------------------------------------------------------------
+  # Commit message format
+  # ---------------------------------------------------------------------------
+  # Conventional Commits are machine-read for changelog generation and version
+  # bumps, so the format has to actually hold.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.2.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args:
+          # --strict rejects case variations such as "FEAT:".
+          - --strict
+          # Restricting the scope list makes the table in CONTRIBUTING.md
+          # enforceable rather than advisory, so scopes stay a closed
+          # vocabulary that changelog tooling can group on.
+          - --scopes
+          - gateway,features,model,aggregator,labels,alerts,simulator,dashboard,ml,db,infra,ops,deps,deps-dev
+          - feat
+          - fix
+          - perf
+          - refactor
+          - test
+          - docs
+          - build
+          - ci
+          - chore
+          - revert
+
+  # ---------------------------------------------------------------------------
+  # Type checking -- deliberately a local hook
+  # ---------------------------------------------------------------------------
+  # mirrors-mypy is NOT used here. It installs mypy into an isolated
+  # environment that does not contain FastAPI, Pydantic, or fraudguard-common,
+  # so every third-party type resolves to Any and the hook reports success on
+  # code that mypy would reject in CI. A green hook that proves nothing is
+  # worse than no hook.
+  #
+  # This runs mypy from the real workspace environment instead. It requires
+  # `uv sync --all-packages --all-groups` to have been run.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (workspace environment)
+        entry: uv run --frozen mypy
+        # pass_filenames is false because mypy must analyse the whole workspace
+        # to resolve imports correctly; handed only the changed files it reports
+        # spurious errors about symbols it cannot see. The target is therefore
+        # given explicitly here.
+        args: ["."]
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true

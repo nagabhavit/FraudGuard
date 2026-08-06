@@ -1,0 +1,65 @@
+# =============================================================================
+# Security scanning.
+# =============================================================================
+#
+# Separate from ci.yml deliberately. These checks run on a schedule as well as
+# on pull requests, because a dependency that is safe today can be disclosed
+# as vulnerable tomorrow with no commit to trigger a run.
+# =============================================================================
+
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Monday 06:00 UTC. Catches CVEs disclosed against unchanged code.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install workspace
+        run: uv sync --all-packages --all-groups
+      # --no-emit-workspace excludes the local editable members. Without it,
+      # pip-audit tries to look up fraudguard-common on PyPI, fails to find it,
+      # and aborts the whole audit.
+      - name: Export the resolved dependency set
+        run: >
+          uv export --frozen --all-packages --no-emit-workspace
+          --no-hashes --format requirements-txt > audit-requirements.txt
+      - name: Audit for known vulnerabilities
+        # Auditing the exported lockfile rather than the live environment means
+        # the report describes exactly what would ship.
+        run: uvx pip-audit --requirement audit-requirements.txt --strict
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history: a credential removed in a later commit is still
+          # published in the earlier one, and still needs rotating.
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

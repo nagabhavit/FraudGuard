@@ -1,0 +1,20 @@
+# Review routing. Combined with "Require review from Code Owners" in branch
+# protection, this makes ownership enforceable rather than advisory.
+#
+# The later entry wins, so ordering is significant.
+
+* @nagabhavit
+
+# Changes to the quality gates themselves warrant deliberate review -- it is
+# the easiest place to accidentally weaken the whole pipeline.
+/.github/            @nagabhavit
+/.pre-commit-config.yaml @nagabhavit
+/pyproject.toml      @nagabhavit
+/uv.lock             @nagabhavit
+
+# Architecture decisions are immutable once accepted; edits need scrutiny.
+/docs/adr/           @nagabhavit
+
+# Infrastructure changes can take production down.
+/infra/              @nagabhavit
+/docker-compose.yml  @nagabhavit
