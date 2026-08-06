@@ -109,7 +109,7 @@ repos:
           # enforceable rather than advisory, so scopes stay a closed
           # vocabulary that changelog tooling can group on.
           - --scopes
-          - gateway,features,model,aggregator,labels,alerts,simulator,dashboard,ml,db,infra,ops,deps,deps-dev
+          - common,gateway,features,model,aggregator,labels,alerts,simulator,dashboard,ml,db,infra,ops,deps,deps-dev
           - feat
           - fix
           - perf

@@ -97,8 +97,8 @@ bumps are derived from these messages.
 **Types:** `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `build`, `ci`,
 `chore`, `revert`
 
-**Scopes:** `gateway`, `features`, `model`, `aggregator`, `labels`, `alerts`,
-`simulator`, `dashboard`, `ml`, `db`, `infra`, `ops`, `deps`
+**Scopes:** `common`, `gateway`, `features`, `model`, `aggregator`, `labels`,
+`alerts`, `simulator`, `dashboard`, `ml`, `db`, `infra`, `ops`, `deps`
 
 Subject is imperative mood, lowercase, no trailing period, under 72 characters.
 A breaking change appends `!` after the scope and explains the break in the body.
