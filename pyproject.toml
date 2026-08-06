@@ -1,0 +1,169 @@
+# FraudGuard workspace root.
+#
+# This file is a coordination shell, not a package. It declares the workspace
+# members, the shared development toolchain, and the configuration for every
+# tool in the repository. Runtime dependencies belong to individual members.
+
+[project]
+name = "fraudguard"
+version = "0.1.0"
+description = "Distributed real-time fraud detection platform"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Nagabhavit Pampati" }]
+
+# Intentionally empty. The root has no runtime dependencies; installing it
+# should never pull anything into a production image.
+dependencies = []
+
+[tool.uv]
+# The root is not built or installed. Without this, uv looks for a `fraudguard`
+# package to build and fails on the missing source tree.
+package = false
+
+[tool.uv.workspace]
+# Glob-based so adding services/feature-service requires no edit here.
+# dashboard/ is deliberately excluded: it is an npm project, not a uv member.
+members = ["services/*", "libs/*"]
+
+[tool.uv.sources]
+# Workspace members resolve to the local path rather than PyPI.
+fraudguard-common = { workspace = true }
+
+# PEP 735 dependency groups. These are development-only by construction and
+# can never leak into a production image, which is why they are used here
+# instead of [project.optional-dependencies].
+# Ranges here, exact pins in uv.lock -- the lockfile is the single source of
+# truth for what actually installs.
+#
+# Ruff is the deliberate exception and stays pinned exactly. It is a formatter:
+# a minor version bump can change its output, which would make
+# `ruff format --check` fail on untouched files across the whole repository.
+# The pin must also stay in step with the rev in .pre-commit-config.yaml.
+[dependency-groups]
+lint = ["ruff==0.14.6"]
+typecheck = ["mypy>=1.18,<2"]
+test = [
+    "pytest>=9.0.3,<10", # 8.x has PYSEC-2026-1845
+    "pytest-asyncio>=1.2,<2",
+    "pytest-cov>=7.0,<8",
+    "httpx>=0.28,<1",
+]
+dev = [
+    { include-group = "lint" },
+    { include-group = "typecheck" },
+    { include-group = "test" },
+    "pre-commit>=4.4,<5",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff: linter and formatter
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+extend-exclude = ["dashboard", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # import sorting
+    "N",       # pep8 naming
+    "UP",      # pyupgrade: keep syntax current with the pinned python
+    "B",       # bugbear: mutable defaults, loop-variable capture
+    "A",       # builtin shadowing
+    "C4",      # comprehension simplification
+    "SIM",     # simplification
+    "RUF",     # ruff-specific
+    "ASYNC",   # blocking calls inside async functions -- the single most
+               # damaging class of bug in a latency-bound service
+    "S",       # bandit security rules
+    "PT",      # pytest style
+    "RET",     # return-statement consistency
+    "ARG",     # unused arguments, usually a sign of a stale signature
+    "PTH",     # prefer pathlib over os.path
+    "TRY",     # exception-handling antipatterns
+    "ERA",     # commented-out code
+]
+ignore = [
+    "TRY003",  # long messages outside the exception class: too noisy for the
+               # value it provides
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = [
+    "S101",    # assert is the point of a test
+    "S105",    # hardcoded fixture credentials
+    "S106",
+    "ARG",     # pytest fixtures are injected and often unused by name
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fraudguard_common", "gateway"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# Mypy: strict from day one
+# ---------------------------------------------------------------------------
+# Retrofitting strict mode onto a mature codebase is a multi-week project.
+# Enabling it before the first line of logic exists costs nothing.
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+show_error_codes = true
+pretty = true
+plugins = ["pydantic.mypy"]
+exclude = ["^dashboard/", "^\\.venv/"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["services", "libs"]
+# importmode=importlib avoids pytest's legacy sys.path manipulation, so two
+# test files with the same name in different packages do not collide and tests
+# exercise the installed package rather than the source tree.
+addopts = "-q --strict-markers --strict-config --import-mode=importlib"
+asyncio_mode = "auto"
+xfail_strict = true
+filterwarnings = [
+    # A warning that nobody reads is a warning that will hide a real bug.
+    "error",
+    "ignore::DeprecationWarning:pkg_resources",
+]
+markers = [
+    "integration: requires the docker compose stack to be running",
+    "slow: takes more than one second",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+# Measure the installed packages by import name, not by directory. Directory
+# paths break once code runs from site-packages inside a container.
+source_pkgs = ["fraudguard_common", "gateway"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Ratcheted upward each milestone. A threshold that blocks the first commit
+# gets disabled by whoever is unblocked by disabling it, and never re-enabled.
+fail_under = 80
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]

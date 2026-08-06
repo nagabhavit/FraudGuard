@@ -1,0 +1,110 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# uv creates a single virtualenv at the workspace root.
+.venv/
+venv/
+
+# uv.lock is deliberately NOT ignored.
+#
+# Applications commit their lockfile; libraries do not. FraudGuard is a
+# deployable application monorepo, so the lockfile is the record of exactly
+# what shipped. Ignoring it means CI resolves fresh on every run and
+# "works on my machine" becomes unfalsifiable.
+
+# =============================================================================
+# Node / dashboard
+# =============================================================================
+node_modules/
+dashboard/dist/
+dashboard/.vite/
+npm-debug.log*
+yarn-error.log*
+.eslintcache
+
+# package-lock.json is committed for the same reason as uv.lock.
+
+# =============================================================================
+# Secrets and local configuration
+# =============================================================================
+# .env holds local credentials and is never committed. .env.example is the
+# committed contract describing which variables exist.
+.env
+.env.*
+!.env.example
+
+*.pem
+*.key
+*.p12
+secrets/
+credentials.json
+
+# Per-developer Compose customisation. This is the sanctioned escape hatch for
+# local tweaks so nobody edits docker-compose.yml and commits it by accident.
+docker-compose.override.yml
+
+# =============================================================================
+# Infrastructure
+# =============================================================================
+# Terraform state can contain plaintext secrets -- database passwords, generated
+# keys. It belongs in an encrypted S3 bucket with DynamoDB locking, never git.
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+
+# Kubernetes secrets rendered locally
+*-secret.yaml
+
+# =============================================================================
+# Machine learning artifacts
+# =============================================================================
+# Model binaries and datasets are large and versioned by content, not by git.
+# They live in S3 with a model_registry row pointing at the URI.
+ml/models/*
+!ml/models/.gitkeep
+ml/datasets/*
+!ml/datasets/.gitkeep
+*.pkl
+*.joblib
+*.parquet
+mlruns/
+
+# =============================================================================
+# Editors and operating systems
+# =============================================================================
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# Runtime
+# =============================================================================
+*.log
+logs/
+tmp/

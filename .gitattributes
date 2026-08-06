@@ -1,0 +1,30 @@
+# Line endings are a property of the repository, not of the developer's
+# machine. Without this, Windows checkouts convert LF to CRLF, the
+# mixed-line-ending pre-commit hook converts them back, and every commit
+# produces a whole-file diff that nobody can review.
+#
+# `text=auto eol=lf` means: git decides what is text, and text is always
+# stored AND checked out as LF.
+* text=auto eol=lf
+
+# Files that must never be touched by line-ending normalisation.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.pkl binary
+*.joblib binary
+*.parquet binary
+*.gz binary
+*.zip binary
+
+# Shell scripts must be LF or they fail inside Linux containers with a
+# confusing "bad interpreter" error.
+*.sh text eol=lf
+
+# Generated lockfiles: mark as such so GitHub collapses them in diffs and
+# they are excluded from language statistics.
+uv.lock linguist-generated=true
+package-lock.json linguist-generated=true

@@ -1,0 +1,162 @@
+# =============================================================================
+# FraudGuard local development stack -- infrastructure only.
+# =============================================================================
+#
+# Application services (gateway, dashboard) are added in a later milestone,
+# once their Dockerfiles exist. A compose file that references a missing
+# Dockerfile fails the entire `up`, so they are deliberately absent.
+#
+# Every stateful service declares a real healthcheck. Application services will
+# depend on `condition: service_healthy`, not `service_started` -- without that
+# distinction the gateway races Postgres on a cold start and dies on first
+# connect.
+# =============================================================================
+
+name: fraudguard
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL -- system of record
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: fraudguard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fraudguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraudguard}
+      POSTGRES_DB: ${POSTGRES_DB:-fraudguard}
+      # Fail fast on an accidental unauthenticated container.
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-fraudguard} -d ${POSTGRES_DB:-fraudguard}
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    logging: *default-logging
+    networks: [fraudguard]
+
+  # ---------------------------------------------------------------------------
+  # Redis -- online feature store
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: fraudguard-redis
+    restart: unless-stopped
+    # noeviction is deliberate. Silently evicting a velocity counter under
+    # memory pressure would corrupt a fraud decision with no error anywhere.
+    # We would rather the write fail loudly and trip the degradation ladder.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging: *default-logging
+    networks: [fraudguard]
+
+  # ---------------------------------------------------------------------------
+  # Kafka -- durable event log, KRaft mode (ZooKeeper is removed in Kafka 4.x)
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: fraudguard-kafka
+    restart: unless-stopped
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-29092}:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      # Two advertised listeners, and this is the single most common local
+      # Kafka failure. A client is told where to reconnect after metadata
+      # discovery: containers must be told "kafka:9092", your laptop must be
+      # told "localhost:29092". One listener cannot serve both.
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:${KAFKA_EXTERNAL_PORT:-29092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Single broker locally; production uses 3 with RF=3 (Milestone 29).
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Auto-created topics silently get one partition and default retention.
+      # Topics are infrastructure and are created explicitly in Milestone 8.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      # Kafka needs longer than the others to elect a controller and open its
+      # listeners. Too short a start_period marks it unhealthy while it is
+      # simply still booting.
+      start_period: 30s
+    logging: *default-logging
+    networks: [fraudguard]
+
+  # ---------------------------------------------------------------------------
+  # Schema Registry -- Avro schema governance
+  # ---------------------------------------------------------------------------
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.8.0
+    container_name: fraudguard-schema-registry
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "${SCHEMA_REGISTRY_PORT:-8081}:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      # BACKWARD compatibility is enforced by the registry itself, so a
+      # producer cannot ship an incompatible schema even if CI is bypassed.
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: backward
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/subjects || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *default-logging
+    networks: [fraudguard]
+
+volumes:
+  postgres-data:
+  redis-data:
+  kafka-data:
+
+networks:
+  fraudguard:
+    driver: bridge

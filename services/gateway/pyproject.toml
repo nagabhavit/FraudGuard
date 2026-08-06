@@ -1,0 +1,27 @@
+# FraudGuard API gateway.
+#
+# Owns the public authorization endpoint, request validation, and orchestration
+# of the scoring hot path. Dependencies are declared here rather than at the
+# workspace root so that `uv sync --package fraudguard-gateway` installs this
+# service's subtree and nothing else -- the image never carries LightGBM.
+
+[project]
+name = "fraudguard-gateway"
+version = "0.1.0"
+description = "Transaction authorization gateway and hot-path orchestrator"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Nagabhavit Pampati" }]
+
+dependencies = [
+    "fastapi>=0.118,<1",
+    "uvicorn[standard]>=0.38,<1",
+    "fraudguard-common",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gateway"]

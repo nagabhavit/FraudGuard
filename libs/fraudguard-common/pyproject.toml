@@ -1,0 +1,29 @@
+# Shared building blocks imported by every FraudGuard service.
+#
+# This package is the counterweight to per-service isolation. Without it, each
+# service grows its own settings loader and log formatter and they drift apart.
+# Kept deliberately thin: anything here is coupled to every service, so a
+# breaking change costs a coordinated release.
+
+[project]
+name = "fraudguard-common"
+version = "0.1.0"
+description = "Shared configuration, logging, and error types for FraudGuard services"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Nagabhavit Pampati" }]
+
+dependencies = [
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Distribution name is hyphenated, import name is underscored -- PyPA
+# convention. The mapping is explicit so the build backend does not have to
+# guess.
+[tool.hatch.build.targets.wheel]
+packages = ["src/fraudguard_common"]
