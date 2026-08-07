@@ -118,35 +118,39 @@ jobs:
           if-no-files-found: error
 
   integration:
-    name: Integration tests (Postgres)
+    name: Integration tests (Postgres, Kafka, Schema Registry)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    # A real Postgres, not a mock -- the whole point of `fraudguard-db`'s
-    # integration suite is to catch a schema/driver mismatch that a mock
-    # would paper over silently.
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: fraudguard
-          POSTGRES_PASSWORD: fraudguard
-          POSTGRES_DB: fraudguard
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U fraudguard -d fraudguard"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
+    timeout-minutes: 15
+    # The real docker-compose stack, not bare GH Actions service containers.
+    # Schema Registry depends on Kafka being healthy first (KRaft needs a
+    # moment to elect a controller); `services:` starts every container in
+    # parallel with no ordering between them, which is exactly the failure
+    # mode `depends_on: condition: service_healthy` in docker-compose.yml
+    # already solves. Reusing it here means the startup ordering CI relies
+    # on is the same ordering a developer's `docker compose up -d` gets --
+    # one definition, not two that can drift.
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      # --wait blocks until every service's healthcheck passes (or fails
+      # the step if one never does), instead of returning as soon as the
+      # containers start.
+      - name: Start postgres, kafka, and schema-registry
+        run: docker compose up -d --wait postgres kafka schema-registry
       - name: Install workspace
         run: uv sync --all-packages --group test
+      # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false (docker-compose.yml) and
+      # this is a fresh cluster with no persisted topics, unlike a
+      # developer's long-running local stack.
+      - name: Create Kafka topics
+        run: uv run --all-packages python ops/scripts/create_kafka_topics.py
       - name: Pytest (integration only)
         run: uv run pytest -m integration -v
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
 
   hooks:
     name: Pre-commit hooks
