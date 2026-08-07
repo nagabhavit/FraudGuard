@@ -224,6 +224,40 @@ services:
     logging: *default-logging
     networks: [fraudguard]
 
+  # ---------------------------------------------------------------------------
+  # Aggregator -- Kafka consumer that maintains the Redis feature store
+  # ---------------------------------------------------------------------------
+  aggregator:
+    build:
+      # Root context, not services/aggregator/ -- the Dockerfile copies both
+      # its own directory and the shared libs/ tree. See ADR-0002.
+      context: .
+      dockerfile: services/aggregator/Dockerfile
+    container_name: fraudguard-aggregator
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "${AGGREGATOR_PORT:-8002}:8002"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Same reasoning as the gateway and feature-service: the internal
+      # listener and service names, not the host-side mappings in .env.
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    # No healthcheck: block here -- the image declares its own HEALTHCHECK
+    # in services/aggregator/Dockerfile, unlike the vendored images above,
+    # which ship none.
+    logging: *default-logging
+    networks: [fraudguard]
+
 volumes:
   postgres-data:
   redis-data:

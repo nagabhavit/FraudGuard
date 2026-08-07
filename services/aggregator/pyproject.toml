@@ -1,0 +1,33 @@
+# FraudGuard stream aggregator.
+#
+# Consumes fraudguard.transactions.v1 and folds each event into the Redis
+# feature store -- the write side of the cold path; see ADR-0008.
+# Dependencies are declared here rather than at the workspace root so that
+# `uv sync --package fraudguard-aggregator` installs this service's subtree
+# and nothing else -- the image never carries LightGBM or a Postgres driver
+# it does not use.
+
+[project]
+name = "fraudguard-aggregator"
+version = "0.1.0"
+description = "Kafka consumer that maintains the Redis feature store from the transaction stream"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Nagabhavit Pampati" }]
+
+dependencies = [
+    "fastapi>=0.118,<1",
+    "uvicorn[standard]>=0.38,<1",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "fraudguard-common",
+    "fraudguard-events",
+    "fraudguard-features",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aggregator"]

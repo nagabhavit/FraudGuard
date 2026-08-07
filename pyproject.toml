@@ -120,6 +120,7 @@ known-first-party = [
     "fraudguard_features",
     "gateway",
     "feature_service",
+    "aggregator",
 ]
 
 [tool.ruff.format]
@@ -186,6 +187,7 @@ source_pkgs = [
     "fraudguard_features",
     "gateway",
     "feature_service",
+    "aggregator",
 ]
 omit = ["*/tests/*"]
 

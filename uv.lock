@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 [manifest]
 members = [
     "fraudguard",
+    "fraudguard-aggregator",
     "fraudguard-common",
     "fraudguard-db",
     "fraudguard-events",
@@ -370,6 +371,31 @@ test = [
     { name = "pytest-cov", specifier = ">=7.0,<8" },
 ]
 typecheck = [{ name = "mypy", specifier = ">=1.18,<2" }]
+
+[[package]]
+name = "fraudguard-aggregator"
+version = "0.1.0"
+source = { editable = "services/aggregator" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "fraudguard-common" },
+    { name = "fraudguard-events" },
+    { name = "fraudguard-features" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.118,<1" },
+    { name = "fraudguard-common", editable = "libs/fraudguard-common" },
+    { name = "fraudguard-events", editable = "libs/fraudguard-events" },
+    { name = "fraudguard-features", editable = "libs/fraudguard-features" },
+    { name = "pydantic", specifier = ">=2.10,<3" },
+    { name = "pydantic-settings", specifier = ">=2.7,<3" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.38,<1" },
+]
 
 [[package]]
 name = "fraudguard-common"
