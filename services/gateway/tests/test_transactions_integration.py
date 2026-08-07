@@ -6,9 +6,13 @@ as fraudguard-db's and fraudguard-events' own integration suites. Verifies
 the full chain for real: HTTP 200 with a genuine model decision, a genuine
 Postgres `Decision` row, and a genuine Avro-encoded Kafka message that
 decodes back to the same transaction. The degradation-ladder fallback
-(ADR-0009) is exercised separately, against unreachable service URLs, in
+(ADR-0009) is exercised separately, against a fake `ScoringDependency` that
+raises `UpstreamUnavailableError`, in
 `test_create_transaction_falls_back_when_scoring_is_unreachable` below --
-still against the real Postgres, just not the real feature/model services.
+still against the real Postgres, just not real feature/model-service network
+calls: a real unreachable host (e.g. a closed port) does not fail
+predictably fast on every platform, and this test only needs to prove the
+fallback path persists correctly, not that httpx's own timeout works.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from aiokafka import AIOKafkaConsumer, ConsumerRecord
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from fraudguard_common.errors import UpstreamUnavailableError
 from fraudguard_db.models import Decision, DecisionOutcome, Transaction
 from fraudguard_db.session import Database, DatabaseSettings
 from fraudguard_events import TRANSACTIONS_V1, decode
@@ -110,21 +115,31 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
         await consumer.stop()
 
 
+class _UnavailableScoringClient:
+    async def get_features(self, account_id: UUID) -> dict[str, int]:
+        raise UpstreamUnavailableError("feature-service unreachable")
+
+    async def score(self, **kwargs: object) -> dict[str, object]:
+        raise AssertionError("must not be called: get_features already failed")
+
+    async def aclose(self) -> None:
+        pass
+
+
 async def test_create_transaction_falls_back_when_scoring_is_unreachable() -> None:
     """The degradation ladder (ADR-0009), against a real Postgres.
 
-    Points the gateway at an unreachable feature-service URL -- the real
-    infrastructure this suite needs is Postgres and Kafka, not
-    feature-service/model-service, which is the whole point of this test:
-    it proves the gateway degrades to a real decision instead of hanging or
-    failing open, without needing those two services to actually be down.
+    Injects a fake `ScoringDependency` that always raises
+    `UpstreamUnavailableError` -- the real infrastructure this suite needs
+    is Postgres, not feature-service/model-service, which is the whole
+    point of this test: it proves a fallback decision persists correctly
+    against a real database, not that HTTP against an unreachable host
+    times out (that is `HttpScoringClient`'s own hermetic tests,
+    `test_gateway_scoring.py`, against a mocked transport).
     """
-    settings = GatewaySettings(
-        _env_file=None,
-        feature_service_url="http://localhost:1",
-        scoring_timeout_seconds=1.0,
+    app = create_app(
+        GatewaySettings(_env_file=None), scoring=_UnavailableScoringClient()
     )
-    app = create_app(settings)
     account_id = uuid4()
     payload = {
         "account_id": str(account_id),

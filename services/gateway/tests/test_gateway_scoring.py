@@ -17,12 +17,9 @@ from uuid import UUID
 import httpx2 as httpx
 import pytest
 
+from fraudguard_common.errors import UpstreamTimeoutError, UpstreamUnavailableError
 from fraudguard_db.models import DecisionOutcome
-from gateway.scoring import (
-    HttpScoringClient,
-    ScoringUnavailableError,
-    score_transaction,
-)
+from gateway.scoring import HttpScoringClient, score_transaction
 
 _ACCOUNT_ID = UUID("d975f45f-e13c-4934-b6bc-ed86130a8f27")
 
@@ -124,7 +121,9 @@ async def test_success_forwards_the_transaction_amount_and_looked_up_features() 
 async def test_feature_service_failure_falls_back_on_amount(
     amount: Decimal, expected_outcome: DecisionOutcome
 ) -> None:
-    client = _FakeScoringClient(features_error=httpx.ConnectError("connection refused"))
+    client = _FakeScoringClient(
+        features_error=UpstreamUnavailableError("connection refused")
+    )
     scored = await score_transaction(
         client,
         account_id=_ACCOUNT_ID,
@@ -137,7 +136,9 @@ async def test_feature_service_failure_falls_back_on_amount(
 
 
 async def test_model_service_timeout_falls_back() -> None:
-    client = _FakeScoringClient(score_error=httpx.ReadTimeout("model-service too slow"))
+    client = _FakeScoringClient(
+        score_error=UpstreamTimeoutError("model-service too slow")
+    )
     scored = await score_transaction(
         client,
         account_id=_ACCOUNT_ID,
@@ -150,7 +151,7 @@ async def test_model_service_timeout_falls_back() -> None:
 
 async def test_model_service_error_response_falls_back() -> None:
     client = _FakeScoringClient(
-        score_error=ScoringUnavailableError("model-service returned 500")
+        score_error=UpstreamUnavailableError("model-service returned 500")
     )
     scored = await score_transaction(
         client,
@@ -227,7 +228,31 @@ async def test_http_scoring_client_get_features_raises_on_server_error() -> None
         feature_handler=httpx.MockTransport(lambda r: httpx.Response(503)),
         model_handler=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
     )
-    with pytest.raises(ScoringUnavailableError, match="503"):
+    with pytest.raises(UpstreamUnavailableError, match="503"):
+        await client.get_features(_ACCOUNT_ID)
+
+
+async def test_http_scoring_client_get_features_raises_timeout_on_timeout() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("feature-service too slow")
+
+    client = _http_client_with_transports(
+        feature_handler=httpx.MockTransport(handler),
+        model_handler=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
+    )
+    with pytest.raises(UpstreamTimeoutError, match="feature-service"):
+        await client.get_features(_ACCOUNT_ID)
+
+
+async def test_http_scoring_client_get_features_raises_unavailable_on_connect() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    client = _http_client_with_transports(
+        feature_handler=httpx.MockTransport(handler),
+        model_handler=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
+    )
+    with pytest.raises(UpstreamUnavailableError, match="feature-service"):
         await client.get_features(_ACCOUNT_ID)
 
 
@@ -277,7 +302,7 @@ async def test_http_scoring_client_score_raises_on_server_error() -> None:
         feature_handler=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
         model_handler=httpx.MockTransport(lambda r: httpx.Response(500)),
     )
-    with pytest.raises(ScoringUnavailableError, match="500"):
+    with pytest.raises(UpstreamUnavailableError, match="500"):
         await client.score(
             amount=Decimal("10.00"),
             velocity_1m=1,

@@ -5,7 +5,10 @@ order, synchronously, each under its own bounded timeout. On any failure --
 timeout, connection error, non-2xx -- scoring falls back to a fixed rule on
 the transaction's own amount, and the decision is recorded with
 `model_version = None` (the existing signal, ADR-0005, that a fallback rule
-decided, not the model).
+decided, not the model). Failures are raised as `fraudguard_common.errors`'
+`UpstreamTimeoutError`/`UpstreamUnavailableError` -- the shared taxonomy
+already distinguishes exactly the two cases the degradation ladder cares
+about, so this is the first real caller of that distinction, not a new one.
 
 The gateway does not import `fraudguard-ml` or the model/feature services'
 own request/response models -- it only knows the JSON shape it sends and
@@ -23,6 +26,11 @@ from uuid import UUID
 
 import httpx2 as httpx
 
+from fraudguard_common.errors import (
+    FraudGuardError,
+    UpstreamTimeoutError,
+    UpstreamUnavailableError,
+)
 from fraudguard_common.logging import get_logger
 from fraudguard_db.models import DecisionOutcome
 
@@ -80,11 +88,9 @@ class HttpScoringClient:
         )
 
     async def get_features(self, account_id: UUID) -> dict[str, int]:
-        response = await self._feature_client.get(f"/v1/features/{account_id}")
-        if response.status_code >= httpx.codes.BAD_REQUEST:
-            raise ScoringUnavailableError(
-                f"feature-service returned {response.status_code}"
-            )
+        response = await _send(
+            self._feature_client, "feature-service", "GET", f"/v1/features/{account_id}"
+        )
         payload = response.json()
         return {
             "velocity_1m": int(payload["velocity_1m"]),
@@ -102,7 +108,10 @@ class HttpScoringClient:
         velocity_24h: int,
         distinct_merchants_24h: int,
     ) -> dict[str, object]:
-        response = await self._model_client.post(
+        response = await _send(
+            self._model_client,
+            "model-service",
+            "POST",
             "/v1/score",
             json={
                 "amount": str(amount),
@@ -112,10 +121,6 @@ class HttpScoringClient:
                 "distinct_merchants_24h": distinct_merchants_24h,
             },
         )
-        if response.status_code >= httpx.codes.BAD_REQUEST:
-            raise ScoringUnavailableError(
-                f"model-service returned {response.status_code}"
-            )
         result: dict[str, object] = response.json()
         return result
 
@@ -124,8 +129,30 @@ class HttpScoringClient:
         await self._model_client.aclose()
 
 
-class ScoringUnavailableError(Exception):
-    """feature-service or model-service answered, but not usefully."""
+async def _send(
+    client: httpx.AsyncClient,
+    service_name: str,
+    method: str,
+    url: str,
+    **kwargs: object,
+) -> httpx.Response:
+    """One HTTP call, translated onto `fraudguard_common`'s shared error
+    taxonomy -- the same distinction `UpstreamTimeoutError` vs.
+    `UpstreamUnavailableError` was defined for (see their docstrings): a
+    timeout may mean the request is still being processed downstream, an
+    unreachable or error-answering dependency means it was not.
+    """
+    try:
+        response = await client.request(method, url, **kwargs)  # type: ignore[arg-type]
+    except httpx.TimeoutException as exc:
+        raise UpstreamTimeoutError(f"{service_name} timed out") from exc
+    except httpx.HTTPError as exc:
+        raise UpstreamUnavailableError(f"{service_name} unreachable: {exc}") from exc
+    if response.status_code >= httpx.codes.BAD_REQUEST:
+        raise UpstreamUnavailableError(
+            f"{service_name} returned {response.status_code}"
+        )
+    return response
 
 
 def _fallback_outcome(amount: Decimal, *, threshold: Decimal) -> DecisionOutcome:
@@ -172,7 +199,7 @@ async def score_transaction(
             reason_codes=cast("list[str]", result["reason_codes"]),
             latency_ms=(time.monotonic() - start) * 1000,
         )
-    except (httpx.HTTPError, ScoringUnavailableError, KeyError, ValueError):
+    except (FraudGuardError, KeyError, ValueError):
         # KeyError/ValueError: a reachable but malformed response -- e.g. a
         # missing field or an outcome string DecisionOutcome does not
         # recognise -- is the same "cannot trust this answer" case as

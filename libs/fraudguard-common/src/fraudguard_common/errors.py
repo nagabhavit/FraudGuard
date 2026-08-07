@@ -54,7 +54,7 @@ class UpstreamTimeoutError(FraudGuardError):
     treats them differently: a timeout may mean the request is still being
     processed downstream, an unavailable dependency means it was never
     accepted at all. Collapsing them would erase information the degradation
-    ladder (Milestone 10+) needs.
+    ladder needs -- see the gateway's `scoring.py` (ADR-0009).
     """
 
     error_code = "upstream_timeout"
