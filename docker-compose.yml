@@ -105,7 +105,8 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       # Auto-created topics silently get one partition and default retention.
-      # Topics are infrastructure and are created explicitly in Milestone 8.
+      # Topics are infrastructure and are created explicitly (Milestone 6,
+      # ops/scripts/create_kafka_topics.py) instead.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     volumes:
@@ -184,6 +185,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-fraudguard}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraudguard}
       POSTGRES_DB: ${POSTGRES_DB:-fraudguard}
+      # Same reasoning: the internal listener and service name, not the
+      # host-side mapping in .env.
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
     # No healthcheck: block here -- the image declares its own HEALTHCHECK
     # in services/gateway/Dockerfile, unlike the vendored images above, which
     # ship none.

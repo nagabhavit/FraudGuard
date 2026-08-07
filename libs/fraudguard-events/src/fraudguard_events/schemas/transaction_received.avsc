@@ -1,0 +1,38 @@
+{
+  "type": "record",
+  "name": "TransactionReceived",
+  "namespace": "com.fraudguard.events",
+  "doc": "Emitted once per transaction the gateway accepts, before any decision is made. Consumed by the stream aggregator (Milestone 8) to maintain velocity features.",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": { "type": "string", "logicalType": "uuid" },
+      "doc": "Unique id of this event, distinct from transaction_id -- a redelivery carries the same transaction_id but a fresh event_id."
+    },
+    {
+      "name": "transaction_id",
+      "type": { "type": "string", "logicalType": "uuid" }
+    },
+    {
+      "name": "account_id",
+      "type": { "type": "string", "logicalType": "uuid" },
+      "doc": "Also the Kafka message key, so all events for one account land on the same partition and preserve order."
+    },
+    { "name": "merchant_id", "type": "string" },
+    {
+      "name": "amount",
+      "type": { "type": "bytes", "logicalType": "decimal", "precision": 12, "scale": 2 }
+    },
+    { "name": "currency", "type": "string" },
+    {
+      "name": "occurred_at",
+      "type": { "type": "long", "logicalType": "timestamp-micros" },
+      "doc": "When the transaction happened, as reported by the caller."
+    },
+    {
+      "name": "received_at",
+      "type": { "type": "long", "logicalType": "timestamp-micros" },
+      "doc": "When the gateway accepted it -- may lag occurred_at under retry or replay."
+    }
+  ]
+}

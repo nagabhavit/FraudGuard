@@ -31,6 +31,7 @@ members = ["services/*", "libs/*"]
 # Workspace members resolve to the local path rather than PyPI.
 fraudguard-common = { workspace = true }
 fraudguard-db = { workspace = true }
+fraudguard-events = { workspace = true }
 
 # PEP 735 dependency groups. These are development-only by construction and
 # can never leak into a production image, which is why they are used here
@@ -111,7 +112,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["fraudguard_common", "fraudguard_db", "gateway"]
+known-first-party = ["fraudguard_common", "fraudguard_db", "fraudguard_events", "gateway"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -134,6 +135,13 @@ exclude = ["^dashboard/", "^\\.venv/"]
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+# aiokafka ships no py.typed marker and no stub package exists on PyPI as of
+# this writing. Every call site into it is still covered by our own
+# `EventProducer` wrapper's fully-typed signatures.
+[[tool.mypy.overrides]]
+module = "aiokafka.*"
+ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
 # Pytest
@@ -163,7 +171,7 @@ markers = [
 branch = true
 # Measure the installed packages by import name, not by directory. Directory
 # paths break once code runs from site-packages inside a container.
-source_pkgs = ["fraudguard_common", "fraudguard_db", "gateway"]
+source_pkgs = ["fraudguard_common", "fraudguard_db", "fraudguard_events", "gateway"]
 omit = ["*/tests/*"]
 
 [tool.coverage.report]
