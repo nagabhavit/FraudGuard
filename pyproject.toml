@@ -32,6 +32,7 @@ members = ["services/*", "libs/*"]
 fraudguard-common = { workspace = true }
 fraudguard-db = { workspace = true }
 fraudguard-events = { workspace = true }
+fraudguard-features = { workspace = true }
 
 # PEP 735 dependency groups. These are development-only by construction and
 # can never leak into a production image, which is why they are used here
@@ -112,7 +113,14 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["fraudguard_common", "fraudguard_db", "fraudguard_events", "gateway"]
+known-first-party = [
+    "fraudguard_common",
+    "fraudguard_db",
+    "fraudguard_events",
+    "fraudguard_features",
+    "gateway",
+    "feature_service",
+]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -171,7 +179,14 @@ markers = [
 branch = true
 # Measure the installed packages by import name, not by directory. Directory
 # paths break once code runs from site-packages inside a container.
-source_pkgs = ["fraudguard_common", "fraudguard_db", "fraudguard_events", "gateway"]
+source_pkgs = [
+    "fraudguard_common",
+    "fraudguard_db",
+    "fraudguard_events",
+    "fraudguard_features",
+    "gateway",
+    "feature_service",
+]
 omit = ["*/tests/*"]
 
 [tool.coverage.report]

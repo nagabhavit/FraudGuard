@@ -195,6 +195,35 @@ services:
     logging: *default-logging
     networks: [fraudguard]
 
+  # ---------------------------------------------------------------------------
+  # Feature service -- read API for precomputed fraud-detection features
+  # ---------------------------------------------------------------------------
+  feature-service:
+    build:
+      # Root context, not services/feature-service/ -- the Dockerfile copies
+      # both its own directory and the shared libs/ tree. See ADR-0002.
+      context: .
+      dockerfile: services/feature-service/Dockerfile
+    container_name: fraudguard-feature-service
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${FEATURE_SERVICE_PORT:-8001}:8001"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Overrides .env's REDIS_HOST=localhost -- inside the compose network
+      # this service reaches Redis by service name, not by the host-side
+      # port mapping.
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    # No healthcheck: block here -- the image declares its own HEALTHCHECK
+    # in services/feature-service/Dockerfile, unlike the vendored images
+    # above, which ship none.
+    logging: *default-logging
+    networks: [fraudguard]
+
 volumes:
   postgres-data:
   redis-data:
