@@ -9,9 +9,11 @@ in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 
 > **Status: early build.** Workspace, tooling, and local infrastructure are in
 > place. The gateway accepts a transaction (`POST /v1/transactions`),
-> persists it to Postgres, and publishes it to Kafka for the cold path —
-> with no scoring logic yet. That lands with the feature store and model
-> service in the milestones tracked in
+> persists it to Postgres, and publishes it to Kafka for the cold path.
+> `feature-service` serves precomputed velocity and merchant-diversity
+> signals from Redis (`GET /v1/features/{account_id}`) — but the gateway
+> does not call it yet, and there is no scoring logic. Both land with the
+> model service in the milestones tracked in
 > [`docs/architecture.md`](docs/architecture.md).
 
 ---
@@ -48,7 +50,7 @@ refreshes what the hot path reads. Full design: [`docs/architecture.md`](docs/ar
 | --- | --- | --- |
 | API | FastAPI | Async I/O suits a service that mostly waits on Redis and gRPC; Pydantic gives validation and OpenAPI for free |
 | System of record | PostgreSQL 16 + SQLAlchemy 2.0 (async) + Alembic | ACID on financial records; JSONB for feature snapshots; native partitioning; async ORM keeps the hot path off a blocking driver (ADR-0005) |
-| Online store | Redis 7 | Sub-millisecond reads; sorted sets and HyperLogLog are exactly the right primitives for velocity and cardinality |
+| Online store | Redis 7 + redis-py (async) | Sub-millisecond reads; sorted sets and HyperLogLog are exactly the right primitives for velocity and cardinality (ADR-0007) |
 | Event log | Kafka 3.9 (KRaft) + aiokafka | Durable, replayable, ordered per key — replay is what lets features be rebuilt; async producer keeps Kafka calls off the hot path's event loop (ADR-0006) |
 | Schema governance | Confluent Schema Registry + fastavro | BACKWARD compatibility enforced at the broker, not just in CI; hand-rolled wire-format codec avoids a native `librdkafka` dependency (ADR-0006) |
 | Model | LightGBM | Gradient-boosted trees beat deep learning on tabular fraud data, train in minutes, infer in single-digit ms, and produce SHAP explanations regulators accept |
@@ -75,8 +77,8 @@ git clone <your-repo-url> fraudguard && cd fraudguard
 cp .env.example .env
 
 uv sync --all-packages --all-groups      # reproducible venv from uv.lock
-docker compose up -d      # postgres, redis, kafka, schema registry, gateway
-docker compose ps         # all five must report (healthy)
+docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service
+docker compose ps         # all six must report (healthy)
 
 # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false -- topics are created explicitly.
 uv run --all-packages python ops/scripts/create_kafka_topics.py
@@ -92,6 +94,7 @@ docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
 curl -fsS http://localhost:8081/subjects
 curl -fsS http://localhost:8000/health/live
 curl -fsS http://localhost:8000/health/ready   # checks real Postgres connectivity
+curl -fsS http://localhost:8001/health/ready   # checks real Redis connectivity
 ```
 
 Send a transaction (persists to Postgres, publishes to Kafka -- no scoring yet):
@@ -108,10 +111,18 @@ curl -i -X POST http://localhost:8000/v1/transactions \
       }'
 ```
 
-Run the gateway locally without Docker (auto-reloads on change):
+Read precomputed features for an account (all zeros until the stream
+aggregator, Milestone 8, is writing to Redis for real):
+
+```bash
+curl -fsS http://localhost:8001/v1/features/d975f45f-e13c-4934-b6bc-ed86130a8f27
+```
+
+Run a service locally without Docker (auto-reloads on change):
 
 ```bash
 uv run --package fraudguard-gateway uvicorn gateway.asgi:app --reload --port 8000
+uv run --package fraudguard-feature-service uvicorn feature_service.asgi:app --reload --port 8001
 ```
 
 Tear down:
@@ -215,6 +226,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0004](docs/adr/0004-quality-gates.md) | Split quality gates between pre-commit and CI |
 | [0005](docs/adr/0005-database-access-layer.md) | Async SQLAlchemy for the app, sync Alembic for migrations, in a shared `fraudguard-db` package |
 | [0006](docs/adr/0006-kafka-event-publishing.md) | aiokafka + fastavro for event publishing, in a shared `fraudguard-events` package |
+| [0007](docs/adr/0007-feature-store-data-model.md) | Sorted-set velocity + day-bucketed HyperLogLog diversity in Redis, served by a new `feature-service` |
 
 ---
 

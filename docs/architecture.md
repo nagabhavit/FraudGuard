@@ -36,6 +36,21 @@ Declared as code in `fraudguard_events.topics`, created explicitly by
 Schema Registry. See ADR-0006 for the client and serialization choices, and
 why a failed publish does not fail the request.
 
+## Feature store
+
+| Signal | Structure | Key | Read |
+| --- | --- | --- | --- |
+| Velocity (1m / 1h / 24h transaction counts) | Sorted set, member = `event_id`, score = `occurred_at` | `velocity:{account_id}` | `ZCOUNT` between `now - window` and `now` |
+| Merchant diversity (~24h distinct count) | HyperLogLog, one per account per calendar day | `merchant_hll:{account_id}:{date}` | `PFCOUNT` across the trailing 2 day-buckets |
+
+`fraudguard-features` owns both the write side (`FeatureStore.record_transaction`,
+called by the future stream aggregator, Milestone 8) and the read side
+(`get_feature_vector`, called by `feature-service`, Milestone 7) against the
+same schema. `GET /v1/features/{account_id}` on `feature-service` returns
+the current vector; an account with no history gets zeros, not 404. See
+ADR-0007 for the full reasoning, including why the gateway does not call
+this service yet.
+
 ## Current implementation status
 
 | Component | State |
@@ -45,7 +60,7 @@ why a failed publish does not fail the request.
 | Gateway service | App factory, health probes, request-context middleware, containerized — no scoring logic yet |
 | Database schema / migrations | Implemented — `fraudguard-db` (SQLAlchemy models), Alembic migrations in `db/migrations/`; gateway's `/health/ready` checks real Postgres connectivity |
 | Kafka topics / Avro schemas | Implemented — `fraudguard-events` (topics, schemas, Schema Registry client), `ops/scripts/create_kafka_topics.py`; gateway's `POST /v1/transactions` persists and publishes to the cold path (ADR-0006) |
-| Feature store (Redis primitives) | Not started |
+| Feature store (Redis primitives) | Implemented — `fraudguard-features` (velocity sorted sets, merchant-diversity HyperLogLog); `feature-service`'s `GET /v1/features/{account_id}` serves it (ADR-0007). Gateway not yet wired to call it — that lands with the model service, Milestone 9 |
 | Stream aggregator | Not started |
 | Model service / LightGBM training | Not started |
 | Observability (Prometheus/Grafana) | Not started |
@@ -63,7 +78,7 @@ scope is not yet fully specified.
 | 4 | Gateway skeleton | FastAPI app factory, `/health/live` + `/health/ready`, request-id middleware, Dockerfile, wired into Compose |
 | 5 | Database layer | SQLAlchemy models + Alembic migrations: `transactions`, `decisions`, `labels` (ADR-0005) |
 | 6 | Kafka topics + schemas | Topic creation, Avro schemas in Schema Registry, gateway publishes to the cold path (ADR-0006) |
-| 7 | Feature store | Redis velocity/aggregate primitives (sorted sets, HyperLogLog), a feature-service API |
+| 7 | Feature store | Redis velocity/aggregate primitives (sorted sets, HyperLogLog), a feature-service API (ADR-0007) |
 | 8 | Stream aggregator | Kafka consumer maintaining Redis features from the transaction stream |
 | 9 | Model service | LightGBM training on synthetic data, inference service, gateway calls it in the hot path |
 | 10 | Observability | Prometheus metrics, latency histograms, a Grafana dashboard |
