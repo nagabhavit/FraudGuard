@@ -114,7 +114,7 @@ scope is not yet fully specified.
 | 9 | Model service | LightGBM training on synthetic data, inference service, gateway calls it in the hot path |
 | 10 | Observability | Prometheus metrics, latency histograms, a Grafana dashboard |
 | 11 | Simulator + integration tests | Transaction generator, end-to-end tests against the real Compose stack |
-| 12+ | Dashboard, alerts, labels, degradation ladder, load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
+| 12+ | Dashboard, alerts, labels, load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
 
 ## Degradation ladder
 
