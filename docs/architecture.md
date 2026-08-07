@@ -24,6 +24,18 @@ in the hot path — it is the durable, replayable log that keeps the cold
 path's aggregates correct, including after a bug requires rebuilding them
 from scratch.
 
+## Kafka topics
+
+| Topic | Schema | Producer | Consumer | Key |
+| --- | --- | --- | --- | --- |
+| `fraudguard.transactions.v1` | `TransactionReceived` (Avro, `libs/fraudguard-events/src/fraudguard_events/schemas/`) | Gateway, on every accepted transaction | Stream aggregator (Milestone 8, not yet built) | `account_id` -- keeps one account's events ordered on one partition |
+
+Declared as code in `fraudguard_events.topics`, created explicitly by
+`ops/scripts/create_kafka_topics.py` (`KAFKA_AUTO_CREATE_TOPICS_ENABLE` is
+`false`), and Avro-encoded with the Confluent wire format against the
+Schema Registry. See ADR-0006 for the client and serialization choices, and
+why a failed publish does not fail the request.
+
 ## Current implementation status
 
 | Component | State |
@@ -32,7 +44,7 @@ from scratch.
 | `fraudguard-common` (settings, structured logging, error taxonomy) | Implemented |
 | Gateway service | App factory, health probes, request-context middleware, containerized — no scoring logic yet |
 | Database schema / migrations | Implemented — `fraudguard-db` (SQLAlchemy models), Alembic migrations in `db/migrations/`; gateway's `/health/ready` checks real Postgres connectivity |
-| Kafka topics / Avro schemas | Not started |
+| Kafka topics / Avro schemas | Implemented — `fraudguard-events` (topics, schemas, Schema Registry client), `ops/scripts/create_kafka_topics.py`; gateway's `POST /v1/transactions` persists and publishes to the cold path (ADR-0006) |
 | Feature store (Redis primitives) | Not started |
 | Stream aggregator | Not started |
 | Model service / LightGBM training | Not started |
@@ -50,7 +62,7 @@ scope is not yet fully specified.
 | 2 | `fraudguard-common` core | Settings base, structured JSON logging, typed error taxonomy |
 | 4 | Gateway skeleton | FastAPI app factory, `/health/live` + `/health/ready`, request-id middleware, Dockerfile, wired into Compose |
 | 5 | Database layer | SQLAlchemy models + Alembic migrations: `transactions`, `decisions`, `labels` (ADR-0005) |
-| 6 | Kafka topics + schemas | Topic creation, Avro schemas in Schema Registry, gateway publishes to the cold path |
+| 6 | Kafka topics + schemas | Topic creation, Avro schemas in Schema Registry, gateway publishes to the cold path (ADR-0006) |
 | 7 | Feature store | Redis velocity/aggregate primitives (sorted sets, HyperLogLog), a feature-service API |
 | 8 | Stream aggregator | Kafka consumer maintaining Redis features from the transaction stream |
 | 9 | Model service | LightGBM training on synthetic data, inference service, gateway calls it in the hot path |

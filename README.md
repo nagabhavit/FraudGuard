@@ -8,10 +8,11 @@ Distributed real-time fraud detection platform. Transactions are scored inline
 in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 
 > **Status: early build.** Workspace, tooling, and local infrastructure are in
-> place. The gateway exists as a running skeleton (app factory, structured
-> logging, health probes, containerized) with no scoring logic yet — that
-> lands with the feature store, model service, and Kafka pipeline in the
-> milestones tracked in [`docs/architecture.md`](docs/architecture.md).
+> place. The gateway accepts a transaction (`POST /v1/transactions`),
+> persists it to Postgres, and publishes it to Kafka for the cold path —
+> with no scoring logic yet. That lands with the feature store and model
+> service in the milestones tracked in
+> [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -48,8 +49,8 @@ refreshes what the hot path reads. Full design: [`docs/architecture.md`](docs/ar
 | API | FastAPI | Async I/O suits a service that mostly waits on Redis and gRPC; Pydantic gives validation and OpenAPI for free |
 | System of record | PostgreSQL 16 + SQLAlchemy 2.0 (async) + Alembic | ACID on financial records; JSONB for feature snapshots; native partitioning; async ORM keeps the hot path off a blocking driver (ADR-0005) |
 | Online store | Redis 7 | Sub-millisecond reads; sorted sets and HyperLogLog are exactly the right primitives for velocity and cardinality |
-| Event log | Kafka 3.9 (KRaft) | Durable, replayable, ordered per key — replay is what lets features be rebuilt |
-| Schema governance | Confluent Schema Registry | BACKWARD compatibility enforced at the broker, not just in CI |
+| Event log | Kafka 3.9 (KRaft) + aiokafka | Durable, replayable, ordered per key — replay is what lets features be rebuilt; async producer keeps Kafka calls off the hot path's event loop (ADR-0006) |
+| Schema governance | Confluent Schema Registry + fastavro | BACKWARD compatibility enforced at the broker, not just in CI; hand-rolled wire-format codec avoids a native `librdkafka` dependency (ADR-0006) |
 | Model | LightGBM | Gradient-boosted trees beat deep learning on tabular fraud data, train in minutes, infer in single-digit ms, and produce SHAP explanations regulators accept |
 | Dashboard | React + TypeScript | Type safety across the API boundary |
 | Packaging | uv workspace | One lockfile, per-service dependency subtrees |
@@ -76,6 +77,9 @@ cp .env.example .env
 uv sync --all-packages --all-groups      # reproducible venv from uv.lock
 docker compose up -d      # postgres, redis, kafka, schema registry, gateway
 docker compose ps         # all five must report (healthy)
+
+# KAFKA_AUTO_CREATE_TOPICS_ENABLE is false -- topics are created explicitly.
+uv run --all-packages python ops/scripts/create_kafka_topics.py
 ```
 
 Verify the stack:
@@ -87,6 +91,21 @@ docker compose exec kafka /opt/kafka/bin/kafka-topics.sh \
   --bootstrap-server localhost:9092 --list
 curl -fsS http://localhost:8081/subjects
 curl -fsS http://localhost:8000/health/live
+curl -fsS http://localhost:8000/health/ready   # checks real Postgres connectivity
+```
+
+Send a transaction (persists to Postgres, publishes to Kafka -- no scoring yet):
+
+```bash
+curl -i -X POST http://localhost:8000/v1/transactions \
+  -H "Content-Type: application/json" \
+  -d '{
+        "account_id": "d975f45f-e13c-4934-b6bc-ed86130a8f27",
+        "merchant_id": "merchant-1",
+        "amount": "42.50",
+        "currency": "USD",
+        "occurred_at": "2026-08-07T12:00:00Z"
+      }'
 ```
 
 Run the gateway locally without Docker (auto-reloads on change):
@@ -195,6 +214,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0003](docs/adr/0003-uv-workspace-single-lockfile.md) | uv workspace with a single lockfile |
 | [0004](docs/adr/0004-quality-gates.md) | Split quality gates between pre-commit and CI |
 | [0005](docs/adr/0005-database-access-layer.md) | Async SQLAlchemy for the app, sync Alembic for migrations, in a shared `fraudguard-db` package |
+| [0006](docs/adr/0006-kafka-event-publishing.md) | aiokafka + fastavro for event publishing, in a shared `fraudguard-events` package |
 
 ---
 
