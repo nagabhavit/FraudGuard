@@ -28,7 +28,7 @@ from scratch.
 
 | Topic | Schema | Producer | Consumer | Key |
 | --- | --- | --- | --- | --- |
-| `fraudguard.transactions.v1` | `TransactionReceived` (Avro, `libs/fraudguard-events/src/fraudguard_events/schemas/`) | Gateway, on every accepted transaction | Stream aggregator (Milestone 8, not yet built) | `account_id` -- keeps one account's events ordered on one partition |
+| `fraudguard.transactions.v1` | `TransactionReceived` (Avro, `libs/fraudguard-events/src/fraudguard_events/schemas/`) | Gateway, on every accepted transaction | Stream aggregator (`services/aggregator`, consumer group `fraudguard-aggregator`) | `account_id` -- keeps one account's events ordered on one partition |
 
 Declared as code in `fraudguard_events.topics`, created explicitly by
 `ops/scripts/create_kafka_topics.py` (`KAFKA_AUTO_CREATE_TOPICS_ENABLE` is
@@ -44,12 +44,32 @@ why a failed publish does not fail the request.
 | Merchant diversity (~24h distinct count) | HyperLogLog, one per account per calendar day | `merchant_hll:{account_id}:{date}` | `PFCOUNT` across the trailing 2 day-buckets |
 
 `fraudguard-features` owns both the write side (`FeatureStore.record_transaction`,
-called by the future stream aggregator, Milestone 8) and the read side
-(`get_feature_vector`, called by `feature-service`, Milestone 7) against the
-same schema. `GET /v1/features/{account_id}` on `feature-service` returns
-the current vector; an account with no history gets zeros, not 404. See
-ADR-0007 for the full reasoning, including why the gateway does not call
-this service yet.
+called by the stream aggregator) and the read side (`get_feature_vector`,
+called by `feature-service`) against the same schema. `GET /v1/features/{account_id}`
+on `feature-service` returns the current vector; an account with no history
+gets zeros, not 404. See ADR-0007 for the full reasoning, including why the
+gateway does not call this service yet.
+
+## Stream aggregator
+
+`services/aggregator` consumes `fraudguard.transactions.v1`, Avro-decodes
+each message against the Schema Registry (a per-process cache keyed by
+schema ID avoids one registry round trip per message), and calls
+`FeatureStore.record_transaction` -- closing the loop from the gateway's
+`POST /v1/transactions` through Kafka to the feature store
+`feature-service` reads from. Offsets commit manually, after processing,
+always -- safe because the Redis writes are idempotent. A message that
+cannot be decoded or applied is logged and skipped, not retried forever.
+`/health/ready` reports Redis reachability and whether the consume loop is
+still running, since a worker with no inbound requests has no natural
+request to fail when something goes wrong. See ADR-0008 for the full
+reasoning.
+
+Verified against the real stack end to end, across genuinely separate
+containers: `POST /v1/transactions` on the gateway container is visible
+via `GET /v1/features/{account_id}` on the feature-service container
+within seconds, with the aggregator container as the only thing connecting
+them.
 
 ## Current implementation status
 
@@ -61,7 +81,7 @@ this service yet.
 | Database schema / migrations | Implemented — `fraudguard-db` (SQLAlchemy models), Alembic migrations in `db/migrations/`; gateway's `/health/ready` checks real Postgres connectivity |
 | Kafka topics / Avro schemas | Implemented — `fraudguard-events` (topics, schemas, Schema Registry client), `ops/scripts/create_kafka_topics.py`; gateway's `POST /v1/transactions` persists and publishes to the cold path (ADR-0006) |
 | Feature store (Redis primitives) | Implemented — `fraudguard-features` (velocity sorted sets, merchant-diversity HyperLogLog); `feature-service`'s `GET /v1/features/{account_id}` serves it (ADR-0007). Gateway not yet wired to call it — that lands with the model service, Milestone 9 |
-| Stream aggregator | Not started |
+| Stream aggregator | Implemented — `services/aggregator` consumes `fraudguard.transactions.v1` and maintains the Redis feature store (ADR-0008). Full cold path (gateway → Kafka → aggregator → Redis → feature-service) verified across real containers |
 | Model service / LightGBM training | Not started |
 | Observability (Prometheus/Grafana) | Not started |
 | Transaction simulator | Not started |
@@ -79,7 +99,7 @@ scope is not yet fully specified.
 | 5 | Database layer | SQLAlchemy models + Alembic migrations: `transactions`, `decisions`, `labels` (ADR-0005) |
 | 6 | Kafka topics + schemas | Topic creation, Avro schemas in Schema Registry, gateway publishes to the cold path (ADR-0006) |
 | 7 | Feature store | Redis velocity/aggregate primitives (sorted sets, HyperLogLog), a feature-service API (ADR-0007) |
-| 8 | Stream aggregator | Kafka consumer maintaining Redis features from the transaction stream |
+| 8 | Stream aggregator | Kafka consumer maintaining Redis features from the transaction stream (ADR-0008) |
 | 9 | Model service | LightGBM training on synthetic data, inference service, gateway calls it in the hot path |
 | 10 | Observability | Prometheus metrics, latency histograms, a Grafana dashboard |
 | 11 | Simulator + integration tests | Transaction generator, end-to-end tests against the real Compose stack |

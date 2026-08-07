@@ -7,13 +7,13 @@
 Distributed real-time fraud detection platform. Transactions are scored inline
 in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 
-> **Status: early build.** Workspace, tooling, and local infrastructure are in
-> place. The gateway accepts a transaction (`POST /v1/transactions`),
-> persists it to Postgres, and publishes it to Kafka for the cold path.
-> `feature-service` serves precomputed velocity and merchant-diversity
-> signals from Redis (`GET /v1/features/{account_id}`) — but the gateway
-> does not call it yet, and there is no scoring logic. Both land with the
-> model service in the milestones tracked in
+> **Status: early build.** The cold path is fully wired end to end: the
+> gateway accepts a transaction (`POST /v1/transactions`), persists it to
+> Postgres, and publishes it to Kafka; the `aggregator` consumes it and
+> maintains velocity and merchant-diversity signals in Redis;
+> `feature-service` serves them (`GET /v1/features/{account_id}`). The
+> gateway does not call `feature-service` yet, and there is no scoring
+> logic — both land with the model service in the milestones tracked in
 > [`docs/architecture.md`](docs/architecture.md).
 
 ---
@@ -77,8 +77,8 @@ git clone <your-repo-url> fraudguard && cd fraudguard
 cp .env.example .env
 
 uv sync --all-packages --all-groups      # reproducible venv from uv.lock
-docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service
-docker compose ps         # all six must report (healthy)
+docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator
+docker compose ps         # all seven must report (healthy)
 
 # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false -- topics are created explicitly.
 uv run --all-packages python ops/scripts/create_kafka_topics.py
@@ -95,27 +95,31 @@ curl -fsS http://localhost:8081/subjects
 curl -fsS http://localhost:8000/health/live
 curl -fsS http://localhost:8000/health/ready   # checks real Postgres connectivity
 curl -fsS http://localhost:8001/health/ready   # checks real Redis connectivity
+curl -fsS http://localhost:8002/health/ready   # checks Redis + that the consume loop is alive
 ```
 
-Send a transaction (persists to Postgres, publishes to Kafka -- no scoring yet):
+Send a transaction (persists to Postgres, publishes to Kafka) and read it
+back from the feature store a few seconds later (the aggregator consumes
+it asynchronously -- ADR-0008). `occurred_at` should be close to "now" or
+it falls outside the 1-minute velocity window `ZCOUNT` checks:
 
 ```bash
+ACCOUNT_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+NOW=$(python3 -c "from datetime import datetime, UTC; print(datetime.now(UTC).isoformat())")
+
 curl -i -X POST http://localhost:8000/v1/transactions \
   -H "Content-Type: application/json" \
-  -d '{
-        "account_id": "d975f45f-e13c-4934-b6bc-ed86130a8f27",
-        "merchant_id": "merchant-1",
-        "amount": "42.50",
-        "currency": "USD",
-        "occurred_at": "2026-08-07T12:00:00Z"
-      }'
-```
+  -d "{
+        \"account_id\": \"$ACCOUNT_ID\",
+        \"merchant_id\": \"merchant-1\",
+        \"amount\": \"42.50\",
+        \"currency\": \"USD\",
+        \"occurred_at\": \"$NOW\"
+      }"
 
-Read precomputed features for an account (all zeros until the stream
-aggregator, Milestone 8, is writing to Redis for real):
-
-```bash
-curl -fsS http://localhost:8001/v1/features/d975f45f-e13c-4934-b6bc-ed86130a8f27
+sleep 3
+curl -fsS "http://localhost:8001/v1/features/$ACCOUNT_ID"
+# {"account_id": "...", "velocity_1m": 1, "velocity_1h": 1, "velocity_24h": 1, "distinct_merchants_24h": 1}
 ```
 
 Run a service locally without Docker (auto-reloads on change):
@@ -123,6 +127,7 @@ Run a service locally without Docker (auto-reloads on change):
 ```bash
 uv run --package fraudguard-gateway uvicorn gateway.asgi:app --reload --port 8000
 uv run --package fraudguard-feature-service uvicorn feature_service.asgi:app --reload --port 8001
+uv run --package fraudguard-aggregator uvicorn aggregator.asgi:app --reload --port 8002
 ```
 
 Tear down:
@@ -227,6 +232,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0005](docs/adr/0005-database-access-layer.md) | Async SQLAlchemy for the app, sync Alembic for migrations, in a shared `fraudguard-db` package |
 | [0006](docs/adr/0006-kafka-event-publishing.md) | aiokafka + fastavro for event publishing, in a shared `fraudguard-events` package |
 | [0007](docs/adr/0007-feature-store-data-model.md) | Sorted-set velocity + day-bucketed HyperLogLog diversity in Redis, served by a new `feature-service` |
+| [0008](docs/adr/0008-stream-aggregator.md) | Manual offset commits (at-least-once, idempotent writes), cached schema resolution, and dual-check readiness for the new `aggregator` |
 
 ---
 
