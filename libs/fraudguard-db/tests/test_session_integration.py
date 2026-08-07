@@ -2,10 +2,17 @@
 
 Requires the docker compose stack (`docker compose up -d postgres`), which
 is why every test here is marked `integration` -- see the marker
-registered in the root `pyproject.toml`. Table creation/teardown is scoped
-to this module's own fixture rather than depending on Alembic migrations
-existing yet, and always tears down so a later Alembic-managed schema does
-not collide with a table this suite left behind.
+registered in the root `pyproject.toml`.
+
+The fixture ensures the schema exists (`create_all`, which SQLAlchemy skips
+per-table if already present) but deliberately never drops it. This same
+schema is what `db/migrations/` manages and what a running gateway depends
+on -- against a shared local Postgres (as opposed to CI's ephemeral, per-run
+container) an earlier version of this fixture dropped the tables in its
+teardown unconditionally, silently destroying an Alembic-applied schema the
+moment this suite ran. `alembic_version` still claimed "head" afterwards;
+the tables underneath it were simply gone. Tests must not have side effects
+outside their own sandbox on state they do not own.
 """
 
 from __future__ import annotations
@@ -35,12 +42,14 @@ pytestmark = pytest.mark.integration
 async def db() -> AsyncIterator[Database]:
     database = Database(DatabaseSettings())
     async with database.engine.begin() as conn:
+        # checkfirst=True (the default) makes this a no-op against a
+        # database Alembic already migrated -- it does not drop and does
+        # not need to, since the schema these models describe and the
+        # schema the latest migration creates are the same schema.
         await conn.run_sync(Base.metadata.create_all)
     try:
         yield database
     finally:
-        async with database.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
         await database.dispose()
 
 
