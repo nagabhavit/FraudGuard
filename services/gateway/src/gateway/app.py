@@ -25,6 +25,7 @@ from fraudguard_events import (
 from gateway import health, transactions
 from gateway.errors import fraudguard_error_handler
 from gateway.middleware import RequestContextMiddleware
+from gateway.scoring import HttpScoringClient, ScoringDependency
 from gateway.settings import GatewaySettings, get_settings
 
 
@@ -68,12 +69,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await app.state.db.dispose()
         await app.state.events.stop()
+        await app.state.scoring.aclose()
 
 
 def create_app(
     settings: GatewaySettings | None = None,
     database: ReadinessDependency | None = None,
     events: EventPublisher | None = None,
+    scoring: ScoringDependency | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(service_name=settings.service_name, level=settings.log_level)
@@ -93,6 +96,11 @@ def create_app(
         app.state.events = EventProducer(
             event_settings.kafka_bootstrap_servers, event_settings.schema_registry_url
         )
+    app.state.scoring = scoring or HttpScoringClient(
+        feature_service_url=settings.feature_service_url,
+        model_service_url=settings.model_service_url,
+        timeout_seconds=settings.scoring_timeout_seconds,
+    )
 
     app.add_middleware(RequestContextMiddleware)
     app.add_exception_handler(FraudGuardError, fraudguard_error_handler)

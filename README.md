@@ -7,14 +7,16 @@
 Distributed real-time fraud detection platform. Transactions are scored inline
 in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 
-> **Status: early build.** The cold path is fully wired end to end: the
-> gateway accepts a transaction (`POST /v1/transactions`), persists it to
-> Postgres, and publishes it to Kafka; the `aggregator` consumes it and
-> maintains velocity and merchant-diversity signals in Redis;
-> `feature-service` serves them (`GET /v1/features/{account_id}`). The
-> gateway does not call `feature-service` yet, and there is no scoring
-> logic — both land with the model service in the milestones tracked in
-> [`docs/architecture.md`](docs/architecture.md).
+> **Status: early build.** Both paths are wired end to end. Cold path: the
+> gateway persists a transaction to Postgres and publishes it to Kafka; the
+> `aggregator` consumes it and maintains velocity and merchant-diversity
+> signals in Redis; `feature-service` serves them
+> (`GET /v1/features/{account_id}`). Hot path: `POST /v1/transactions` now
+> calls `feature-service` then `model-service` (a trained LightGBM model,
+> `ml/pipelines/train.py`) inline, persists a real `Decision`, and returns
+> it synchronously; a feature-service or model-service outage degrades to a
+> fixed rule instead of blocking or failing open (ADR-0009). Remaining work
+> is tracked in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -77,8 +79,13 @@ git clone <your-repo-url> fraudguard && cd fraudguard
 cp .env.example .env
 
 uv sync --all-packages --all-groups      # reproducible venv from uv.lock
-docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator
-docker compose ps         # all seven must report (healthy)
+
+# model-service (ADR-0009) fails fast at startup with no trained model on
+# disk, and ml/models/ is gitignored -- train one before starting the stack.
+uv run --package fraudguard-ml python ml/pipelines/train.py
+
+docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator, model-service
+docker compose ps         # all eight must report (healthy)
 
 # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false -- topics are created explicitly.
 uv run --all-packages python ops/scripts/create_kafka_topics.py
@@ -96,12 +103,15 @@ curl -fsS http://localhost:8000/health/live
 curl -fsS http://localhost:8000/health/ready   # checks real Postgres connectivity
 curl -fsS http://localhost:8001/health/ready   # checks real Redis connectivity
 curl -fsS http://localhost:8002/health/ready   # checks Redis + that the consume loop is alive
+curl -fsS http://localhost:8003/health/ready   # checks the model loaded at startup
 ```
 
-Send a transaction (persists to Postgres, publishes to Kafka) and read it
-back from the feature store a few seconds later (the aggregator consumes
-it asynchronously -- ADR-0008). `occurred_at` should be close to "now" or
-it falls outside the 1-minute velocity window `ZCOUNT` checks:
+Send a transaction. The gateway scores it inline against feature-service
+and model-service and returns a real decision (ADR-0009); a few seconds
+later, the same transaction's velocity has landed in the feature store via
+the cold path (the aggregator consumes it asynchronously -- ADR-0008).
+`occurred_at` should be close to "now" or it falls outside the 1-minute
+velocity window `ZCOUNT` checks:
 
 ```bash
 ACCOUNT_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
@@ -116,6 +126,8 @@ curl -i -X POST http://localhost:8000/v1/transactions \
         \"currency\": \"USD\",
         \"occurred_at\": \"$NOW\"
       }"
+# {"transaction_id": "...", "outcome": "approve", "risk_score": 0.0004,
+#  "model_version": "fraud-lgbm-20260807-182701", "reason_codes": [...]}
 
 sleep 3
 curl -fsS "http://localhost:8001/v1/features/$ACCOUNT_ID"
@@ -128,6 +140,7 @@ Run a service locally without Docker (auto-reloads on change):
 uv run --package fraudguard-gateway uvicorn gateway.asgi:app --reload --port 8000
 uv run --package fraudguard-feature-service uvicorn feature_service.asgi:app --reload --port 8001
 uv run --package fraudguard-aggregator uvicorn aggregator.asgi:app --reload --port 8002
+uv run --package fraudguard-model-service uvicorn model_service.asgi:app --reload --port 8003
 ```
 
 Tear down:
@@ -233,6 +246,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0006](docs/adr/0006-kafka-event-publishing.md) | aiokafka + fastavro for event publishing, in a shared `fraudguard-events` package |
 | [0007](docs/adr/0007-feature-store-data-model.md) | Sorted-set velocity + day-bucketed HyperLogLog diversity in Redis, served by a new `feature-service` |
 | [0008](docs/adr/0008-stream-aggregator.md) | Manual offset commits (at-least-once, idempotent writes), cached schema resolution, and dual-check readiness for the new `aggregator` |
+| [0009](docs/adr/0009-model-service-and-hot-path-scoring.md) | LightGBM native Booster served by a new `model-service`; gateway calls it inline and falls back to a fixed rule on failure |
 
 ---
 

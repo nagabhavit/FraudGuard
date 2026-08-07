@@ -33,6 +33,7 @@ fraudguard-common = { workspace = true }
 fraudguard-db = { workspace = true }
 fraudguard-events = { workspace = true }
 fraudguard-features = { workspace = true }
+fraudguard-ml = { workspace = true }
 
 # PEP 735 dependency groups. These are development-only by construction and
 # can never leak into a production image, which is why they are used here
@@ -118,9 +119,11 @@ known-first-party = [
     "fraudguard_db",
     "fraudguard_events",
     "fraudguard_features",
+    "fraudguard_ml",
     "gateway",
     "feature_service",
     "aggregator",
+    "model_service",
 ]
 
 [tool.ruff.format]
@@ -185,9 +188,11 @@ source_pkgs = [
     "fraudguard_db",
     "fraudguard_events",
     "fraudguard_features",
+    "fraudguard_ml",
     "gateway",
     "feature_service",
     "aggregator",
+    "model_service",
 ]
 omit = ["*/tests/*"]
 

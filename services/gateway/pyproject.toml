@@ -18,6 +18,7 @@ dependencies = [
     "uvicorn[standard]>=0.38,<1",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
+    "httpx2>=2.9,<3",
     "fraudguard-common",
     "fraudguard-db",
     "fraudguard-events",

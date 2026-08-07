@@ -75,7 +75,7 @@ async def test_transaction_flows_from_gateway_through_to_feature_service() -> No
                     "occurred_at": datetime.now(UTC).isoformat(),
                 },
             )
-        assert response.status_code == 202
+        assert response.status_code == 200
 
         async def _velocity_recorded() -> bool:
             return await store.get_velocity(str(account_id), "1m") > 0

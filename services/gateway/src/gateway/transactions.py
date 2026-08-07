@@ -1,10 +1,11 @@
-"""Transaction ingestion.
+"""Transaction ingestion and hot-path scoring.
 
 Accepts a transaction, persists it durably (Postgres is the system of
-record, ADR-0005), and publishes it to the cold path (ADR-0006). No
-decisioning yet -- that arrives with the feature store and model service
-(Milestones 7-9). This milestone's job is getting the event durably onto
-Kafka, not scoring it.
+record, ADR-0005), scores it inline against feature-service and
+model-service (ADR-0009), persists the resulting `Decision`, and publishes
+the transaction to the cold path (ADR-0006). Scoring runs after the
+transaction is durably committed and before the response, so the response
+carries a real decision, not just an acknowledgement.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from fraudguard_common.logging import get_logger
-from fraudguard_db.models import Transaction
+from fraudguard_db.models import Decision, DecisionOutcome, Transaction
 from fraudguard_events import TRANSACTIONS_V1
+from gateway.scoring import score_transaction
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["transactions"])
@@ -44,19 +46,22 @@ class TransactionCreate(BaseModel):
         return value
 
 
-class TransactionAccepted(BaseModel):
+class TransactionDecision(BaseModel):
     transaction_id: UUID
-    status: str = "accepted"
+    outcome: DecisionOutcome
+    risk_score: float
+    model_version: str | None
+    reason_codes: list[str] | None
 
 
 @router.post(
     "/v1/transactions",
-    status_code=status.HTTP_202_ACCEPTED,
-    response_model=TransactionAccepted,
+    status_code=status.HTTP_200_OK,
+    response_model=TransactionDecision,
 )
 async def create_transaction(
     payload: TransactionCreate, request: Request
-) -> TransactionAccepted:
+) -> TransactionDecision:
     transaction = Transaction(
         account_id=payload.account_id,
         merchant_id=payload.merchant_id,
@@ -70,9 +75,35 @@ async def create_transaction(
         await session.commit()
         await session.refresh(transaction)
 
+    settings = request.app.state.settings
+    scored = await score_transaction(
+        request.app.state.scoring,
+        account_id=transaction.account_id,
+        amount=transaction.amount,
+        fallback_threshold=settings.fallback_amount_threshold,
+    )
+
+    decision = Decision(
+        transaction_id=transaction.id,
+        outcome=scored.outcome,
+        risk_score=scored.risk_score,
+        model_version=scored.model_version,
+        reason_codes=scored.reason_codes,
+        latency_ms=scored.latency_ms,
+    )
+    async with request.app.state.db.session() as session:
+        session.add(decision)
+        await session.commit()
+
     await _publish_transaction_received(request, transaction)
 
-    return TransactionAccepted(transaction_id=transaction.id)
+    return TransactionDecision(
+        transaction_id=transaction.id,
+        outcome=scored.outcome,
+        risk_score=scored.risk_score,
+        model_version=scored.model_version,
+        reason_codes=scored.reason_codes,
+    )
 
 
 async def _publish_transaction_received(

@@ -71,18 +71,29 @@ via `GET /v1/features/{account_id}` on the feature-service container
 within seconds, with the aggregator container as the only thing connecting
 them.
 
+The hot path closes the loop: `ml/pipelines/train.py` trains a LightGBM
+model on synthetic data; `model-service` loads it and serves
+`POST /v1/score`; the gateway calls `feature-service` then `model-service`,
+in that order, on every `POST /v1/transactions`, and persists a real
+`Decision` row (ADR-0009). Verified against the real stack across four
+separate containers (gateway, feature-service, model-service, and the
+aggregator keeping Redis current) -- a transaction posted to the gateway
+returns a genuine model decision synchronously, and the same transaction's
+velocity is visible from `feature-service` a few seconds later via the
+cold path.
+
 ## Current implementation status
 
 | Component | State |
 | --- | --- |
 | Local infrastructure (Postgres, Redis, Kafka, Schema Registry) | Running, `docker-compose.yml` |
 | `fraudguard-common` (settings, structured logging, error taxonomy) | Implemented |
-| Gateway service | App factory, health probes, request-context middleware, containerized — no scoring logic yet |
+| Gateway service | App factory, health probes, request-context middleware, containerized; `POST /v1/transactions` scores inline via feature-service and model-service and returns a real decision (ADR-0009) |
 | Database schema / migrations | Implemented — `fraudguard-db` (SQLAlchemy models), Alembic migrations in `db/migrations/`; gateway's `/health/ready` checks real Postgres connectivity |
 | Kafka topics / Avro schemas | Implemented — `fraudguard-events` (topics, schemas, Schema Registry client), `ops/scripts/create_kafka_topics.py`; gateway's `POST /v1/transactions` persists and publishes to the cold path (ADR-0006) |
-| Feature store (Redis primitives) | Implemented — `fraudguard-features` (velocity sorted sets, merchant-diversity HyperLogLog); `feature-service`'s `GET /v1/features/{account_id}` serves it (ADR-0007). Gateway not yet wired to call it — that lands with the model service, Milestone 9 |
+| Feature store (Redis primitives) | Implemented — `fraudguard-features` (velocity sorted sets, merchant-diversity HyperLogLog); `feature-service`'s `GET /v1/features/{account_id}` serves it (ADR-0007), and the gateway calls it inline on every transaction (ADR-0009) |
 | Stream aggregator | Implemented — `services/aggregator` consumes `fraudguard.transactions.v1` and maintains the Redis feature store (ADR-0008). Full cold path (gateway → Kafka → aggregator → Redis → feature-service) verified across real containers |
-| Model service / LightGBM training | Not started |
+| Model service / LightGBM training | Implemented — `fraudguard-ml` (feature schema, model artifact, schema-hash validation), `ml/pipelines/train.py` (synthetic data, LightGBM native Booster), `model-service`'s `POST /v1/score` (reason codes via `pred_contrib`); gateway calls it inline, falling back to a fixed rule on failure (ADR-0009) |
 | Observability (Prometheus/Grafana) | Not started |
 | Transaction simulator | Not started |
 | Dashboard | Not started |
@@ -107,12 +118,18 @@ scope is not yet fully specified.
 
 ## Degradation ladder
 
-Not yet implemented (arrives with the feature store and model service, since
-there is nothing to degrade from until those exist). The intended shape:
-if the feature service or model service misses its latency budget, the
-gateway falls back to a cheaper, rule-based score rather than blocking the
-payment indefinitely or failing open with no check at all. Recorded as its
-own ADR once the model service exists to fall back from.
+Implemented (ADR-0009). If feature-service or model-service times out,
+refuses the connection, or answers with something the gateway cannot use,
+the gateway falls back to a fixed rule on the transaction's own amount
+(above a threshold: `review`; otherwise `approve`) rather than blocking the
+payment indefinitely or failing open with no check at all. The fallback
+decision is still persisted as a real `Decision` row, with
+`model_version = NULL` -- the existing (Milestone 5) signal that a rule,
+not the model, produced it. What is not yet implemented: a *latency budget*
+distinct from the timeout itself (today, "misses its budget" and "times
+out" are the same bounded-timeout check, not two separate thresholds), and
+metrics on how often the fallback fires (arrives with Observability,
+Milestone 10).
 
 ## Why the split ADRs live separately
 

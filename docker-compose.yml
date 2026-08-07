@@ -173,6 +173,10 @@ services:
         condition: service_healthy
       schema-registry:
         condition: service_healthy
+      feature-service:
+        condition: service_healthy
+      model-service:
+        condition: service_healthy
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
     environment:
@@ -185,10 +189,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-fraudguard}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraudguard}
       POSTGRES_DB: ${POSTGRES_DB:-fraudguard}
-      # Same reasoning: the internal listener and service name, not the
-      # host-side mapping in .env.
+      # Same reasoning: the internal listener and service names, not the
+      # host-side mappings in .env.
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      FEATURE_SERVICE_URL: http://feature-service:8001
+      MODEL_SERVICE_URL: http://model-service:8003
     # No healthcheck: block here -- the image declares its own HEALTHCHECK
     # in services/gateway/Dockerfile, unlike the vendored images above, which
     # ship none.
@@ -255,6 +261,39 @@ services:
     # No healthcheck: block here -- the image declares its own HEALTHCHECK
     # in services/aggregator/Dockerfile, unlike the vendored images above,
     # which ship none.
+    logging: *default-logging
+    networks: [fraudguard]
+
+  # ---------------------------------------------------------------------------
+  # Model service -- real-time fraud scoring over a trained LightGBM model
+  # ---------------------------------------------------------------------------
+  model-service:
+    build:
+      # Root context, not services/model-service/ -- the Dockerfile copies
+      # both its own directory and the shared libs/ tree. See ADR-0002.
+      context: .
+      dockerfile: services/model-service/Dockerfile
+    container_name: fraudguard-model-service
+    restart: unless-stopped
+    # No depends_on -- this service talks to nothing else in the stack, only
+    # to the model file bind-mounted below.
+    ports:
+      - "${MODEL_SERVICE_PORT:-8003}:8003"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # ml/models/ is gitignored (model artifacts are versioned by content,
+      # not by git -- ADR-0009) and so cannot be COPYed into the image at
+      # build time. It is mounted read-only instead: run
+      # `uv run --package fraudguard-ml python ml/pipelines/train.py` on the
+      # host to (re)train, then restart this container to pick it up -- no
+      # image rebuild required.
+      - ./ml/models:/app/ml/models:ro
+    # No healthcheck: block here -- the image declares its own HEALTHCHECK in
+    # services/model-service/Dockerfile, unlike the vendored images above,
+    # which ship none. Until a trained model exists on the host, this
+    # container fails fast at startup and crash-loops under
+    # `restart: unless-stopped` until one appears.
     logging: *default-logging
     networks: [fraudguard]
 

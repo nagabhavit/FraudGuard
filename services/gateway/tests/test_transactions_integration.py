@@ -1,10 +1,14 @@
 """Integration test for POST /v1/transactions against the real stack.
 
-Requires the docker compose stack (postgres, kafka, schema-registry) --
-marked `integration` for the same reason as fraudguard-db's and
-fraudguard-events' own integration suites. Verifies the full chain for
-real: HTTP 202, a genuine Postgres row, and a genuine Avro-encoded Kafka
-message that decodes back to the same transaction.
+Requires the docker compose stack (postgres, kafka, schema-registry,
+feature-service, model-service) -- marked `integration` for the same reason
+as fraudguard-db's and fraudguard-events' own integration suites. Verifies
+the full chain for real: HTTP 200 with a genuine model decision, a genuine
+Postgres `Decision` row, and a genuine Avro-encoded Kafka message that
+decodes back to the same transaction. The degradation-ladder fallback
+(ADR-0009) is exercised separately, against unreachable service URLs, in
+`test_create_transaction_falls_back_when_scoring_is_unreachable` below --
+still against the real Postgres, just not the real feature/model services.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from aiokafka import AIOKafkaConsumer, ConsumerRecord
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from fraudguard_db.models import Transaction
+from fraudguard_db.models import Decision, DecisionOutcome, Transaction
 from fraudguard_db.session import Database, DatabaseSettings
 from fraudguard_events import TRANSACTIONS_V1, decode
 from fraudguard_events.schema_registry import SchemaRegistryClient
@@ -58,8 +62,15 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
 
         with TestClient(app) as client:
             response = client.post("/v1/transactions", json=payload)
-        assert response.status_code == 202
-        transaction_id = UUID(response.json()["transaction_id"])
+        assert response.status_code == 200
+        body = response.json()
+        transaction_id = UUID(body["transaction_id"])
+        # The real model scored this: model_version is populated, not the
+        # fallback rule's None (ADR-0009).
+        assert body["model_version"] is not None
+        assert body["model_version"].startswith("fraud-lgbm-")
+        assert body["outcome"] in {"approve", "decline", "review"}
+        assert 0.0 <= body["risk_score"] <= 1.0
 
         db = Database(DatabaseSettings())
         try:
@@ -67,10 +78,18 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
                 stored = await session.scalar(
                     select(Transaction).where(Transaction.id == transaction_id)
                 )
-            assert stored is not None
-            assert stored.account_id == account_id
-            assert stored.amount == Decimal("17.25")
-            assert stored.currency == "GBP"
+                assert stored is not None
+                assert stored.account_id == account_id
+                assert stored.amount == Decimal("17.25")
+                assert stored.currency == "GBP"
+
+                decision = await session.scalar(
+                    select(Decision).where(Decision.transaction_id == transaction_id)
+                )
+            assert decision is not None
+            assert decision.outcome.value == body["outcome"]
+            assert decision.model_version == body["model_version"]
+            assert decision.latency_ms is not None
         finally:
             await db.dispose()
 
@@ -89,3 +108,48 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
         assert message.key == str(account_id).encode()
     finally:
         await consumer.stop()
+
+
+async def test_create_transaction_falls_back_when_scoring_is_unreachable() -> None:
+    """The degradation ladder (ADR-0009), against a real Postgres.
+
+    Points the gateway at an unreachable feature-service URL -- the real
+    infrastructure this suite needs is Postgres and Kafka, not
+    feature-service/model-service, which is the whole point of this test:
+    it proves the gateway degrades to a real decision instead of hanging or
+    failing open, without needing those two services to actually be down.
+    """
+    settings = GatewaySettings(
+        _env_file=None,
+        feature_service_url="http://localhost:1",
+        scoring_timeout_seconds=1.0,
+    )
+    app = create_app(settings)
+    account_id = uuid4()
+    payload = {
+        "account_id": str(account_id),
+        "merchant_id": "integration-test-merchant",
+        "amount": "999.00",
+        "currency": "USD",
+        "occurred_at": "2026-08-07T09:00:00Z",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/v1/transactions", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model_version"] is None
+    assert body["outcome"] == DecisionOutcome.REVIEW.value
+    transaction_id = UUID(body["transaction_id"])
+
+    db = Database(DatabaseSettings())
+    try:
+        async with db.session() as session:
+            decision = await session.scalar(
+                select(Decision).where(Decision.transaction_id == transaction_id)
+            )
+        assert decision is not None
+        assert decision.model_version is None
+        assert decision.reason_codes is None
+    finally:
+        await db.dispose()
