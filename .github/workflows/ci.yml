@@ -145,34 +145,46 @@ jobs:
       # --wait blocks until every service's healthcheck passes (or fails the
       # step if one never does), instead of returning as soon as the
       # containers start. --build guarantees every service reflects this
-      # checkout's code, not a stale cached image. gateway and aggregator
-      # join the list here (Milestone 11, ADR-0011): the simulator's
-      # black-box tests need the actual containerized gateway reachable at
-      # localhost:8000, and the hot-and-cold-path test needs a real
-      # aggregator consuming into a real feature-service -- earlier
-      # milestones' integration tests never needed either running as a
-      # container, since they built those services' apps in-process instead.
-      # dashboard joins the list here (Milestone 12, ADR-0012): no test
-      # drives it through a browser yet, but --wait still catches an image
-      # that fails to build or fails its own HEALTHCHECK -- exactly the
-      # class of bug (a container-only IPv6/localhost healthcheck failure)
-      # found by running this container for real while building this
-      # milestone, which `npm run build` in the `dashboard` job above
-      # cannot see.
-      - name: Start the stack
+      # checkout's code, not a stale cached image. Split into two `up`
+      # calls, with topic creation in between (see below): infra first --
+      # nothing here depends on a Kafka topic existing -- then the
+      # application tier.
+      - name: Start infrastructure
         run: >
           docker compose up -d --wait --build
-          postgres redis kafka schema-registry feature-service model-service
-          gateway aggregator dashboard
+          postgres redis kafka schema-registry
       # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false (docker-compose.yml) and
       # this is a fresh cluster with no persisted topics, unlike a
-      # developer's long-running local stack. gateway's own healthcheck
-      # does not depend on Kafka (its publish is best-effort, ADR-0006), so
-      # --wait above does not guarantee the topic exists yet -- this step
-      # must still finish before the next one, so every test always sees a
-      # topic that already exists rather than racing its creation.
+      # developer's long-running local stack. This must run *before* the
+      # application services start, not after: the aggregator's Kafka
+      # consumer fails its own startup if the topic it subscribes to does
+      # not exist yet (ADR-0008), which crash-loops the container -- via
+      # `restart: unless-stopped` -- until Docker's HEALTHCHECK gives up and
+      # marks it unhealthy. Creating the topic after a single `--wait` that
+      # already required the aggregator to be healthy was a deadlock, not a
+      # slow race: the topic could never be created in time, and every CI
+      # run against a fresh Kafka volume hit it (a developer's persistent
+      # local volume already has the topic from a prior run, which is why
+      # this went unnoticed locally).
       - name: Create Kafka topics
         run: uv run --all-packages python ops/scripts/create_kafka_topics.py
+      # gateway and aggregator join the list here (Milestone 11, ADR-0011):
+      # the simulator's black-box tests need the actual containerized
+      # gateway reachable at localhost:8000, and the hot-and-cold-path test
+      # needs a real aggregator consuming into a real feature-service --
+      # earlier milestones' integration tests never needed either running as
+      # a container, since they built those services' apps in-process
+      # instead. dashboard joins the list here (Milestone 12, ADR-0012): no
+      # test drives it through a browser yet, but --wait still catches an
+      # image that fails to build or fails its own HEALTHCHECK -- exactly
+      # the class of bug (a container-only IPv6/localhost healthcheck
+      # failure) found by running this container for real while building
+      # that milestone, which `npm run build` in the `dashboard` job above
+      # cannot see.
+      - name: Start application services
+        run: >
+          docker compose up -d --wait --build
+          feature-service model-service gateway aggregator dashboard
       - name: Pytest (integration only)
         run: uv run pytest -m integration -v
       - name: Tear down
