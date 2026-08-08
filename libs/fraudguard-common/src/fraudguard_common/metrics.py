@@ -67,6 +67,14 @@ GATEWAY_KAFKA_PUBLISH_TOTAL = Counter(
 
 #: ADR-0008's poison-message handling: "skipped" means a message was
 #: decoded-but-failed or undecodable and was logged and skipped, not retried.
+#: ADR-0014: ground truth recorded after the fact -- a chargeback, a manual
+#: review, or a customer report -- by source and whether it confirms fraud.
+GATEWAY_LABELS_TOTAL = Counter(
+    "fraudguard_gateway_labels_total",
+    "Labels recorded for transactions, by source and whether they confirm fraud.",
+    labelnames=("source", "is_fraud"),
+)
+
 AGGREGATOR_MESSAGES_TOTAL = Counter(
     "fraudguard_aggregator_messages_total",
     "Kafka messages the aggregator has processed, by outcome.",
@@ -102,6 +110,12 @@ def record_gateway_scoring_budget_exceeded() -> None:
 
 def record_gateway_kafka_publish(*, outcome: str) -> None:
     GATEWAY_KAFKA_PUBLISH_TOTAL.labels(outcome=outcome).inc()
+
+
+def record_gateway_label(*, source: str, is_fraud: bool) -> None:
+    GATEWAY_LABELS_TOTAL.labels(
+        source=source, is_fraud="true" if is_fraud else "false"
+    ).inc()
 
 
 def record_aggregator_message(*, outcome: str) -> None:

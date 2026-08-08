@@ -26,8 +26,11 @@ in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 > (ADR-0012). Prometheus Alertmanager now fires on a sustained fallback
 > rate, a hot-path latency-budget breach distinct from an outright timeout,
 > any service being down, aggregator poison messages, and Kafka publish
-> failures -- a null/log receiver, local dev only (ADR-0013). Remaining
-> work is tracked in [`docs/architecture.md`](docs/architecture.md).
+> failures -- a null/log receiver, local dev only (ADR-0013). The gateway
+> now also accepts ground-truth labels arriving after the fact --
+> `POST /v1/transactions/{id}/labels`, embedded in the dashboard's feed
+> (ADR-0014). Remaining work is tracked in
+> [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -166,6 +169,22 @@ curl -i -X POST http://localhost:8000/v1/transactions \
 sleep 3
 curl -fsS "http://localhost:8001/v1/features/$ACCOUNT_ID"
 # {"account_id": "...", "velocity_1m": 1, "velocity_1h": 1, "velocity_24h": 1, "distinct_merchants_24h": 1}
+```
+
+Record ground truth for a transaction once it exists -- a chargeback, a
+manual review, or a customer report, arriving after the fact (ADR-0014):
+
+```bash
+TRANSACTION_ID=$(curl -fsS "http://localhost:8000/v1/transactions?limit=1" | python3 -c "import sys, json; print(json.load(sys.stdin)['items'][0]['transaction_id'])")
+
+curl -i -X POST "http://localhost:8000/v1/transactions/$TRANSACTION_ID/labels" \
+  -H "Content-Type: application/json" \
+  -d '{"is_fraud": true, "source": "chargeback", "notes": "cardholder disputed the charge"}'
+# {"id": "...", "transaction_id": "...", "is_fraud": true, "source": "chargeback",
+#  "notes": "cardholder disputed the charge", "labeled_at": "..."}
+
+curl -fsS "http://localhost:8000/v1/transactions?limit=1" | python3 -m json.tool
+# the same transaction's "labels" array now includes it
 ```
 
 Or send a batch of realistic traffic instead of one curl at a time
@@ -319,6 +338,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0011](docs/adr/0011-transaction-simulator-and-e2e-tests.md) | A new `services/simulator` (no Dockerfile, not a deployed service) generates realistic transaction traffic and drives the first tests that hit the real, containerized gateway and feature-service directly |
 | [0012](docs/adr/0012-dashboard-read-api.md) | The gateway gains a read-only, unauthenticated `GET /v1/transactions` for the new `dashboard/` React ops console, instead of a new query service |
 | [0013](docs/adr/0013-alerting.md) | Prometheus Alertmanager (a null/log receiver, local dev only) with five alert rules; new metrics close the hot-path-budget-vs-timeout gap and the Kafka-publish-failure gap |
+| [0014](docs/adr/0014-labels-write-api.md) | The gateway gains a write endpoint, `POST /v1/transactions/{id}/labels`, for ground-truth labels, instead of a new `services/labels`; `GET /v1/transactions` embeds them |
 
 ---
 

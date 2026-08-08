@@ -27,6 +27,7 @@ from fraudguard_common.metrics import (
 )
 from fraudguard_db.models import Decision, DecisionOutcome, Transaction
 from fraudguard_events import TRANSACTIONS_V1
+from gateway.labels import LabelSummary
 from gateway.scoring import score_transaction
 
 logger = get_logger(__name__)
@@ -69,10 +70,14 @@ class DecisionSummary(BaseModel):
 
 
 class TransactionFeedItem(BaseModel):
-    """One row of the dashboard's transaction feed (ADR-0012).
+    """One row of the dashboard's transaction feed (ADR-0012, ADR-0014).
 
     `decision` is nullable: a transaction can exist without one if the
     process crashed between the two writes `create_transaction` makes below.
+    `labels` is a list, never null: ground truth arrives after the fact,
+    zero or more times, so "no labels yet" is an empty list, the same
+    "absence is the normal state, not an error" reasoning `feature-service`
+    already applies to an account with no transaction history (ADR-0007).
     """
 
     transaction_id: UUID
@@ -82,6 +87,7 @@ class TransactionFeedItem(BaseModel):
     currency: str
     occurred_at: datetime
     decision: DecisionSummary | None
+    labels: list[LabelSummary]
 
 
 class TransactionFeedPage(BaseModel):
@@ -161,7 +167,9 @@ async def list_transactions(
     async with request.app.state.db.session() as session:
         result = await session.scalars(
             select(Transaction)
-            .options(selectinload(Transaction.decision))
+            .options(
+                selectinload(Transaction.decision), selectinload(Transaction.labels)
+            )
             .order_by(Transaction.occurred_at.desc())
             .limit(limit)
             .offset(offset)
@@ -187,6 +195,16 @@ async def list_transactions(
                 if transaction.decision is not None
                 else None
             ),
+            labels=[
+                LabelSummary(
+                    id=label.id,
+                    is_fraud=label.is_fraud,
+                    source=label.source,
+                    notes=label.notes,
+                    labeled_at=label.labeled_at,
+                )
+                for label in transaction.labels
+            ],
         )
         for transaction in transactions
     ]

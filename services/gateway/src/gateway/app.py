@@ -23,7 +23,7 @@ from fraudguard_events import (
     LocalEventSettings,
     TopicSpec,
 )
-from gateway import health, metrics, transactions
+from gateway import health, labels, metrics, transactions
 from gateway.errors import fraudguard_error_handler
 from gateway.middleware import RequestContextMiddleware
 from gateway.scoring import HttpScoringClient, ScoringDependency
@@ -118,5 +118,6 @@ def create_app(
     app.include_router(health.router)
     app.include_router(metrics.router)
     app.include_router(transactions.router)
+    app.include_router(labels.router)
 
     return app

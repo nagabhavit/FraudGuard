@@ -219,6 +219,41 @@ own polling feed within one refresh interval; a real browser-style CORS
 preflight and `GET` from the dashboard's origin both return
 `Access-Control-Allow-Origin`, and a different origin gets neither.
 
+## Labels
+
+`libs/fraudguard-db`'s `labels` table (Milestone 5, ADR-0005) sat unused
+until this milestone: nothing wrote to it. `gateway/labels.py` (ADR-0014)
+closes that gap with `POST /v1/transactions/{transaction_id}/labels` --
+ground truth arriving after the fact (a chargeback, a manual review, or a
+customer report), on the gateway rather than a new service, for the same
+reasoning ADR-0012 already applied to reads: the gateway already owns the
+`fraudguard-db` session, and recording a label is a cheap, indexed insert
+with no feature-service or model-service call in it, so it does not compete
+with the hot path. A `transaction_id` that does not exist is a 404
+(`NotFoundError`, checked before the insert, not inferred from a foreign-key
+`IntegrityError`). Multiple labels per transaction are accepted with no
+dedup -- a chargeback and a later manual review can disagree, and
+reconciling them is a training-pipeline concern the schema was already
+designed (ADR-0005) not to enforce.
+
+`GET /v1/transactions` now embeds each transaction's labels alongside its
+decision, via a second `selectinload` -- the same no-N+1 pattern ADR-0012
+established, extended rather than duplicated. This is the only way an
+operator sees a label was recorded; there is no dashboard UI for submitting
+or browsing labels in this milestone.
+
+**`ml/pipelines/train.py` is unchanged.** This milestone captures ground
+truth; it does not consume it. A local dev stack does not accumulate enough
+real `Label` rows to meaningfully retrain on, and blending real and
+synthetic ground truth is deferred to a future milestone with real data to
+design against.
+
+Verified against the real stack: a posted transaction can be labeled via
+`POST /v1/transactions/{id}/labels`, the label persists in Postgres and is
+visible via `GET /v1/transactions`, a `transaction_id` that does not exist
+returns 404, and `fraudguard_gateway_labels_total{source, is_fraud}` counts
+the write.
+
 ## Current implementation status
 
 | Component | State |
@@ -235,6 +270,7 @@ preflight and `GET` from the dashboard's origin both return
 | Alerting (Alertmanager) | Implemented — `ops/alertmanager/` (null/log receiver, ADR-0013), five rules in `ops/prometheus/rules/fraudguard.rules.yml` covering the fallback rate, a new hot-path latency-budget-exceeded metric, service health, aggregator poison messages, and a new Kafka-publish-failure metric |
 | Transaction simulator | Implemented — `services/simulator` (`TransactionFactory` + `driver`, ADR-0011); black-box tests against the real, containerized gateway and feature-service (not in-process apps) verify the hot and cold paths end to end; CI's `integration` job now starts the full application tier, not just infrastructure |
 | Dashboard | Implemented — `dashboard/` (React + TypeScript, npm project outside the uv workspace, ADR-0003); gateway's new `GET /v1/transactions` (ADR-0012) serves a live-polling feed of transactions and decisions, unauthenticated by design |
+| Labels | Implemented — `gateway/labels.py`'s `POST /v1/transactions/{id}/labels` (ADR-0014) writes to the previously-unused `labels` table (ADR-0005); `GET /v1/transactions` embeds each transaction's labels; `ml/pipelines/train.py` still trains on synthetic data only, unchanged |
 
 ## Milestones
 
@@ -254,7 +290,8 @@ scope is not yet fully specified.
 | 11 | Simulator + integration tests | Transaction generator, end-to-end tests against the real Compose stack |
 | 12 | Dashboard | React ops console; a new gateway read endpoint, `GET /v1/transactions` (ADR-0012) |
 | 13 | Alerting | Prometheus Alertmanager, alert rules for the degradation ladder and pipeline health, a hot-path latency budget distinct from the timeout (ADR-0013) |
-| 14+ | Labels, load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
+| 14 | Labels | Gateway write endpoint for ground-truth labels arriving after the fact; embedded in the dashboard's transaction feed (ADR-0014) |
+| 15+ | Load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
 
 ## Degradation ladder
 
