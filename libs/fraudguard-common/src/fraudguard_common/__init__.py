@@ -14,6 +14,14 @@ from fraudguard_common.errors import (
     ValidationError,
 )
 from fraudguard_common.logging import configure_logging, get_logger, request_id_var
+from fraudguard_common.metrics import (
+    observe_aggregator_processing_duration,
+    observe_gateway_scoring_duration,
+    observe_http_request,
+    record_aggregator_message,
+    record_gateway_decision,
+    render_metrics,
+)
 from fraudguard_common.settings import (
     BaseServiceSettings,
     Environment,
@@ -36,5 +44,11 @@ __all__ = [
     "ValidationError",
     "configure_logging",
     "get_logger",
+    "observe_aggregator_processing_duration",
+    "observe_gateway_scoring_duration",
+    "observe_http_request",
+    "record_aggregator_message",
+    "record_gateway_decision",
+    "render_metrics",
     "request_id_var",
 ]

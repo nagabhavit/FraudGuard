@@ -22,7 +22,7 @@ from typing import Protocol
 
 from fastapi import FastAPI
 
-from aggregator import health
+from aggregator import health, metrics
 from aggregator.consumer import Aggregator
 from aggregator.middleware import RequestContextMiddleware
 from aggregator.settings import AggregatorSettings, get_settings
@@ -107,7 +107,8 @@ def create_app(
             app.state.store,
         )
 
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestContextMiddleware, service_name=settings.service_name)
     app.include_router(health.router)
+    app.include_router(metrics.router)
 
     return app

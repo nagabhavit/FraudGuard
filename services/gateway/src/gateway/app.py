@@ -22,7 +22,7 @@ from fraudguard_events import (
     LocalEventSettings,
     TopicSpec,
 )
-from gateway import health, transactions
+from gateway import health, metrics, transactions
 from gateway.errors import fraudguard_error_handler
 from gateway.middleware import RequestContextMiddleware
 from gateway.scoring import HttpScoringClient, ScoringDependency
@@ -102,9 +102,10 @@ def create_app(
         timeout_seconds=settings.scoring_timeout_seconds,
     )
 
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestContextMiddleware, service_name=settings.service_name)
     app.add_exception_handler(FraudGuardError, fraudguard_error_handler)
     app.include_router(health.router)
+    app.include_router(metrics.router)
     app.include_router(transactions.router)
 
     return app

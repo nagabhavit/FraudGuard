@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from fraudguard_common.errors import FraudGuardError
 from fraudguard_common.logging import configure_logging
 from fraudguard_ml import FraudModel, LocalModelArtifactSettings
-from model_service import health, scoring
+from model_service import health, metrics, scoring
 from model_service.errors import fraudguard_error_handler
 from model_service.middleware import RequestContextMiddleware
 from model_service.settings import ModelServiceSettings, get_settings
@@ -67,9 +67,10 @@ def create_app(
             Path(artifact_settings.model_metadata_path),
         )
 
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestContextMiddleware, service_name=settings.service_name)
     app.add_exception_handler(FraudGuardError, fraudguard_error_handler)
     app.include_router(health.router)
+    app.include_router(metrics.router)
     app.include_router(scoring.router)
 
     return app

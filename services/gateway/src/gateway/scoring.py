@@ -32,6 +32,7 @@ from fraudguard_common.errors import (
     UpstreamUnavailableError,
 )
 from fraudguard_common.logging import get_logger
+from fraudguard_common.metrics import observe_gateway_scoring_duration
 from fraudguard_db.models import DecisionOutcome
 
 logger = get_logger(__name__)
@@ -210,8 +211,10 @@ async def score_transaction(
             extra={"account_id": str(account_id)},
         )
         latency_ms = (time.monotonic() - start) * 1000
+        observe_gateway_scoring_duration(latency_ms / 1000)
         return _fallback_decision(
             amount, threshold=fallback_threshold, latency_ms=latency_ms
         )
 
+    observe_gateway_scoring_duration(scored.latency_ms / 1000)
     return scored

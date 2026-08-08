@@ -19,6 +19,7 @@ from fastapi import APIRouter, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from fraudguard_common.logging import get_logger
+from fraudguard_common.metrics import record_gateway_decision
 from fraudguard_db.models import Decision, DecisionOutcome, Transaction
 from fraudguard_events import TRANSACTIONS_V1
 from gateway.scoring import score_transaction
@@ -94,6 +95,10 @@ async def create_transaction(
     async with request.app.state.db.session() as session:
         session.add(decision)
         await session.commit()
+
+    record_gateway_decision(
+        outcome=scored.outcome.value, model_version=scored.model_version
+    )
 
     await _publish_transaction_received(request, transaction)
 

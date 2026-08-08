@@ -9,7 +9,20 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from aggregator.consumer import Aggregator, SchemaCache, apply_transaction_event
+from fraudguard_common.metrics import render_metrics
+
+
+def _metric_value(metric_name: str, **labels: str) -> float:
+    text = render_metrics()[0].decode()
+    label_str = ",".join(f'{key}="{value}"' for key, value in sorted(labels.items()))
+    prefix = f"{metric_name}{{{label_str}}} " if labels else f"{metric_name} "
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return float(line.removeprefix(prefix))
+    return 0.0
 
 
 class _FakeRegistry:
@@ -98,9 +111,77 @@ async def test_a_poison_message_is_logged_and_skipped_not_raised() -> None:
         offset=42,
     )
 
+    before = _metric_value("fraudguard_aggregator_messages_total", outcome="skipped")
+    before_duration_count = _metric_value(
+        "fraudguard_aggregator_message_processing_duration_seconds_count"
+    )
+
     await aggregator._process(poison_message)  # must not raise
 
     assert store.calls == []
     # The offset is still committed -- the poison message is skipped, not
     # retried forever.
     assert commits == 1
+    # ADR-0010: a skipped message still counts, and its processing time
+    # (however short) still gets observed -- both happen in _process()'s
+    # `finally`, not only on the success path.
+    after = _metric_value("fraudguard_aggregator_messages_total", outcome="skipped")
+    assert after == before + 1.0
+    after_duration_count = _metric_value(
+        "fraudguard_aggregator_message_processing_duration_seconds_count"
+    )
+    assert after_duration_count == before_duration_count + 1.0
+
+
+async def test_a_successfully_applied_message_records_the_applied_metric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _FakeStore()
+    aggregator = Aggregator("localhost:9092", "http://localhost:8081", store)
+
+    commits = 0
+
+    async def fake_commit() -> None:
+        nonlocal commits
+        commits += 1
+
+    aggregator._consumer = SimpleNamespace(commit=fake_commit)
+
+    # Bypass real schema-registry/Avro decoding (covered by
+    # test_consumer_integration.py against the real stack) -- this test is
+    # only about _process() recording the right metric on the success path.
+    occurred_at = datetime.now(UTC)
+    decoded_record = {
+        "event_id": "evt-applied",
+        "transaction_id": "tx-applied",
+        "account_id": "acct-applied",
+        "merchant_id": "merchant-applied",
+        "occurred_at": occurred_at,
+    }
+
+    async def _fake_schema_lookup(schema_id: int) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr("aggregator.consumer.schema_id_of", lambda value: 1)
+    monkeypatch.setattr(aggregator._schema_cache, "get", _fake_schema_lookup)
+    monkeypatch.setattr(
+        "aggregator.consumer.decode", lambda schema, value: decoded_record
+    )
+
+    message = SimpleNamespace(
+        value=b"irrelevant -- decode() is monkeypatched above",
+        topic="fraudguard.transactions.v1",
+        partition=0,
+        offset=1,
+    )
+
+    before = _metric_value("fraudguard_aggregator_messages_total", outcome="applied")
+
+    await aggregator._process(message)
+
+    assert store.calls == [
+        ("acct-applied", "evt-applied", "merchant-applied", occurred_at)
+    ]
+    assert commits == 1
+    after = _metric_value("fraudguard_aggregator_messages_total", outcome="applied")
+    assert after == before + 1.0

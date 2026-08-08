@@ -13,7 +13,7 @@ from typing import Protocol
 
 from fastapi import FastAPI
 
-from feature_service import features, health
+from feature_service import features, health, metrics
 from feature_service.errors import fraudguard_error_handler
 from feature_service.middleware import RequestContextMiddleware
 from feature_service.settings import FeatureServiceSettings, get_settings
@@ -61,9 +61,10 @@ def create_app(
     app.state.settings = settings
     app.state.store = store or FeatureStore(LocalRedisSettings())
 
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RequestContextMiddleware, service_name=settings.service_name)
     app.add_exception_handler(FraudGuardError, fraudguard_error_handler)
     app.include_router(health.router)
+    app.include_router(metrics.router)
     app.include_router(features.router)
 
     return app

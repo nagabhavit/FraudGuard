@@ -82,6 +82,30 @@ returns a genuine model decision synchronously, and the same transaction's
 velocity is visible from `feature-service` a few seconds later via the
 cold path.
 
+## Observability
+
+Every service exposes `GET /metrics` (Prometheus text format); Prometheus
+scrapes all four on a 10s interval; Grafana is provisioned with a
+datasource and one dashboard, both as code under `ops/` -- `docker compose
+up` produces a working dashboard, no manual click-through setup (ADR-0010).
+
+Beyond generic HTTP request-duration histograms (labelled by route
+*template*, never the resolved URL -- see the ADR on cardinality), two
+business metrics close gaps earlier milestones left open:
+`fraudguard_gateway_decisions_total{outcome, used_model}` is the
+degradation ladder's fallback-rate metric this document previously listed
+as missing (`used_model="false"` is exactly the existing `Decision.model_version
+IS NULL` signal, ADR-0005); `fraudguard_gateway_scoring_duration_seconds`
+is the hot path's actual latency against the README's p99 <= 100 ms budget.
+The aggregator gets the consumer-side equivalent:
+`fraudguard_aggregator_messages_total{outcome}` and
+`fraudguard_aggregator_message_processing_duration_seconds`.
+
+Verified against the real stack: all four services show as `up` in
+Prometheus's own target list, the Grafana dashboard's datasource and six
+panels are provisioned and queryable, and a real `POST /v1/transactions`
+is visible end to end as a PromQL query result within one scrape interval.
+
 ## Current implementation status
 
 | Component | State |
@@ -94,7 +118,7 @@ cold path.
 | Feature store (Redis primitives) | Implemented — `fraudguard-features` (velocity sorted sets, merchant-diversity HyperLogLog); `feature-service`'s `GET /v1/features/{account_id}` serves it (ADR-0007), and the gateway calls it inline on every transaction (ADR-0009) |
 | Stream aggregator | Implemented — `services/aggregator` consumes `fraudguard.transactions.v1` and maintains the Redis feature store (ADR-0008). Full cold path (gateway → Kafka → aggregator → Redis → feature-service) verified across real containers |
 | Model service / LightGBM training | Implemented — `fraudguard-ml` (feature schema, model artifact, schema-hash validation), `ml/pipelines/train.py` (synthetic data, LightGBM native Booster), `model-service`'s `POST /v1/score` (reason codes via `pred_contrib`); gateway calls it inline, falling back to a fixed rule on failure (ADR-0009) |
-| Observability (Prometheus/Grafana) | Not started |
+| Observability (Prometheus/Grafana) | Implemented — `fraudguard_common.metrics` (framework-agnostic definitions), `GET /metrics` on all four services, Prometheus + Grafana in `docker-compose.yml`, dashboard and datasource provisioned as code under `ops/` (ADR-0010) |
 | Transaction simulator | Not started |
 | Dashboard | Not started |
 
@@ -125,11 +149,13 @@ the gateway falls back to a fixed rule on the transaction's own amount
 payment indefinitely or failing open with no check at all. The fallback
 decision is still persisted as a real `Decision` row, with
 `model_version = NULL` -- the existing (Milestone 5) signal that a rule,
-not the model, produced it. What is not yet implemented: a *latency budget*
+not the model, produced it. How often it fires is now a live metric,
+`fraudguard_gateway_decisions_total{used_model="false"}` (ADR-0010),
+dashboarded in Grafana. What is not yet implemented: a *latency budget*
 distinct from the timeout itself (today, "misses its budget" and "times
 out" are the same bounded-timeout check, not two separate thresholds), and
-metrics on how often the fallback fires (arrives with Observability,
-Milestone 10).
+alerting on a sustained fallback rate (no Alertmanager yet -- bucketed in
+the 12+ milestone row alongside the dashboard/alerts work).
 
 ## Why the split ADRs live separately
 

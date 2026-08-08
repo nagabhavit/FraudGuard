@@ -1,0 +1,17 @@
+# Provisions the dashboards under ops/grafana/dashboards/ as code -- see
+# ADR-0010. `allowUiUpdates: false` because the dashboard's source of truth
+# is the JSON file in git, not whatever a session's `docker compose up`
+# happens to have accumulated in Grafana's own sqlite database.
+
+apiVersion: 1
+
+providers:
+  - name: FraudGuard
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/dashboards

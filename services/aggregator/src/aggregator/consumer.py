@@ -9,12 +9,17 @@ this module implements.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from typing import Any, Protocol
 
 from aiokafka import AIOKafkaConsumer, ConsumerRecord
 
 from fraudguard_common.logging import get_logger
+from fraudguard_common.metrics import (
+    observe_aggregator_processing_duration,
+    record_aggregator_message,
+)
 from fraudguard_events import TRANSACTIONS_V1, decode, schema_id_of
 from fraudguard_events.schema_registry import SchemaRegistryClient
 
@@ -134,11 +139,13 @@ class Aggregator:
             self.running = False
 
     async def _process(self, message: ConsumerRecord) -> None:
+        started_at = time.monotonic()
         try:
             schema_id = schema_id_of(message.value)
             schema = await self._schema_cache.get(schema_id)
             record = decode(schema, message.value)
             await apply_transaction_event(self._store, record)
+            record_aggregator_message(outcome="applied")
         except Exception:
             # Logged and skipped, not retried -- see ADR-0008. A poison
             # message must not block every later message on this partition.
@@ -150,7 +157,9 @@ class Aggregator:
                     "kafka_offset": message.offset,
                 },
             )
+            record_aggregator_message(outcome="skipped")
         finally:
+            observe_aggregator_processing_duration(time.monotonic() - started_at)
             # _process() is only ever invoked from run_forever()'s loop,
             # which already guards self._consumer being set; this narrows
             # the type for mypy rather than re-raising for a state that

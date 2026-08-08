@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from fraudguard_common.errors import UpstreamUnavailableError
+from fraudguard_common.metrics import render_metrics
 from fraudguard_db.models import Decision, DecisionOutcome, Transaction
 from fraudguard_db.session import Database, DatabaseSettings
 from fraudguard_events import TRANSACTIONS_V1, decode
@@ -41,6 +42,16 @@ pytestmark = pytest.mark.integration
 async def _next_message(consumer: AIOKafkaConsumer) -> ConsumerRecord:
     async with asyncio.timeout(10.0):
         return await consumer.getone()
+
+
+def _metric_value(metric_name: str, **labels: str) -> float:
+    text = render_metrics()[0].decode()
+    label_str = ",".join(f'{key}="{value}"' for key, value in sorted(labels.items()))
+    prefix = f"{metric_name}{{{label_str}}} " if labels else f"{metric_name} "
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return float(line.removeprefix(prefix))
+    return 0.0
 
 
 async def test_create_transaction_persists_and_publishes_for_real() -> None:
@@ -65,6 +76,21 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
         # test cares about arrives before this consumer starts listening.
         await consumer.seek_to_end()
 
+        # ADR-0010: the outcome isn't known until the real model answers, so
+        # snapshot every possible outcome's counter before the request and
+        # check the one the response actually reports afterward.
+        decisions_before = {
+            outcome: _metric_value(
+                "fraudguard_gateway_decisions_total",
+                outcome=outcome,
+                used_model="true",
+            )
+            for outcome in ("approve", "decline", "review")
+        }
+        scoring_duration_count_before = _metric_value(
+            "fraudguard_gateway_scoring_duration_seconds_count"
+        )
+
         with TestClient(app) as client:
             response = client.post("/v1/transactions", json=payload)
         assert response.status_code == 200
@@ -76,6 +102,17 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
         assert body["model_version"].startswith("fraud-lgbm-")
         assert body["outcome"] in {"approve", "decline", "review"}
         assert 0.0 <= body["risk_score"] <= 1.0
+
+        decisions_after = _metric_value(
+            "fraudguard_gateway_decisions_total",
+            outcome=body["outcome"],
+            used_model="true",
+        )
+        assert decisions_after == decisions_before[body["outcome"]] + 1.0
+        scoring_duration_count_after = _metric_value(
+            "fraudguard_gateway_scoring_duration_seconds_count"
+        )
+        assert scoring_duration_count_after == scoring_duration_count_before + 1.0
 
         db = Database(DatabaseSettings())
         try:
@@ -149,6 +186,10 @@ async def test_create_transaction_falls_back_when_scoring_is_unreachable() -> No
         "occurred_at": "2026-08-07T09:00:00Z",
     }
 
+    fallback_decisions_before = _metric_value(
+        "fraudguard_gateway_decisions_total", outcome="review", used_model="false"
+    )
+
     with TestClient(app) as client:
         response = client.post("/v1/transactions", json=payload)
     assert response.status_code == 200
@@ -156,6 +197,13 @@ async def test_create_transaction_falls_back_when_scoring_is_unreachable() -> No
     assert body["model_version"] is None
     assert body["outcome"] == DecisionOutcome.REVIEW.value
     transaction_id = UUID(body["transaction_id"])
+
+    # ADR-0010: this is the degradation ladder's fallback-rate metric --
+    # used_model="false" is recorded even though no model was involved.
+    fallback_decisions_after = _metric_value(
+        "fraudguard_gateway_decisions_total", outcome="review", used_model="false"
+    )
+    assert fallback_decisions_after == fallback_decisions_before + 1.0
 
     db = Database(DatabaseSettings())
     try:

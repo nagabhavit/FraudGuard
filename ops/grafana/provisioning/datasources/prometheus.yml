@@ -1,0 +1,14 @@
+# Provisions the Prometheus datasource as code -- `docker compose up`
+# produces a working, queryable Grafana with no manual "add datasource"
+# click-through step. See ADR-0010.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

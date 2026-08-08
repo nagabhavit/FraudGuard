@@ -1,0 +1,28 @@
+# Prometheus scrape configuration. See ADR-0010.
+#
+# Targets are the compose network's internal service names, not the
+# host-published ports (same host/container split as every other service's
+# environment overrides in docker-compose.yml). Every service exposes
+# /metrics via fraudguard_common.metrics -- see the ADR for why cardinality
+# is safe to scrape at a short interval (route templates, not raw URLs).
+
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: ["gateway:8000"]
+
+  - job_name: feature-service
+    static_configs:
+      - targets: ["feature-service:8001"]
+
+  - job_name: aggregator
+    static_configs:
+      - targets: ["aggregator:8002"]
+
+  - job_name: model-service
+    static_configs:
+      - targets: ["model-service:8003"]

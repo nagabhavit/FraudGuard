@@ -15,7 +15,9 @@ in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 > calls `feature-service` then `model-service` (a trained LightGBM model,
 > `ml/pipelines/train.py`) inline, persists a real `Decision`, and returns
 > it synchronously; a feature-service or model-service outage degrades to a
-> fixed rule instead of blocking or failing open (ADR-0009). Remaining work
+> fixed rule instead of blocking or failing open (ADR-0009). Every service
+> exposes Prometheus metrics; a Grafana dashboard (request latency, decision
+> outcomes, fallback rate) is provisioned as code (ADR-0010). Remaining work
 > is tracked in [`docs/architecture.md`](docs/architecture.md).
 
 ---
@@ -56,6 +58,7 @@ refreshes what the hot path reads. Full design: [`docs/architecture.md`](docs/ar
 | Event log | Kafka 3.9 (KRaft) + aiokafka | Durable, replayable, ordered per key — replay is what lets features be rebuilt; async producer keeps Kafka calls off the hot path's event loop (ADR-0006) |
 | Schema governance | Confluent Schema Registry + fastavro | BACKWARD compatibility enforced at the broker, not just in CI; hand-rolled wire-format codec avoids a native `librdkafka` dependency (ADR-0006) |
 | Model | LightGBM | Gradient-boosted trees beat deep learning on tabular fraud data, train in minutes, infer in single-digit ms, and produce SHAP explanations regulators accept |
+| Metrics | Prometheus + Grafana | Pull-based scraping needs no push client or retry logic in the hot path; provisioned as code so `docker compose up` yields a working dashboard (ADR-0010) |
 | Dashboard | React + TypeScript | Type safety across the API boundary |
 | Packaging | uv workspace | One lockfile, per-service dependency subtrees |
 
@@ -84,8 +87,8 @@ uv sync --all-packages --all-groups      # reproducible venv from uv.lock
 # disk, and ml/models/ is gitignored -- train one before starting the stack.
 uv run --package fraudguard-ml python ml/pipelines/train.py
 
-docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator, model-service
-docker compose ps         # all eight must report (healthy)
+docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator, model-service, prometheus, grafana
+docker compose ps         # all ten must report (healthy)
 
 # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false -- topics are created explicitly.
 uv run --all-packages python ops/scripts/create_kafka_topics.py
@@ -104,7 +107,14 @@ curl -fsS http://localhost:8000/health/ready   # checks real Postgres connectivi
 curl -fsS http://localhost:8001/health/ready   # checks real Redis connectivity
 curl -fsS http://localhost:8002/health/ready   # checks Redis + that the consume loop is alive
 curl -fsS http://localhost:8003/health/ready   # checks the model loaded at startup
+curl -fsS http://localhost:8000/metrics | head  # Prometheus text format (ADR-0010)
+curl -fsS "http://localhost:9090/api/v1/targets" # every service should show health: "up"
 ```
+
+Open Grafana at <http://localhost:3000> (anonymous admin access, local dev
+only) -- the "FraudGuard Overview" dashboard is provisioned automatically:
+request latency and rate per service, decision outcomes, the degradation
+ladder's fallback rate, and aggregator throughput.
 
 Send a transaction. The gateway scores it inline against feature-service
 and model-service and returns a real decision (ADR-0009); a few seconds
@@ -247,6 +257,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0007](docs/adr/0007-feature-store-data-model.md) | Sorted-set velocity + day-bucketed HyperLogLog diversity in Redis, served by a new `feature-service` |
 | [0008](docs/adr/0008-stream-aggregator.md) | Manual offset commits (at-least-once, idempotent writes), cached schema resolution, and dual-check readiness for the new `aggregator` |
 | [0009](docs/adr/0009-model-service-and-hot-path-scoring.md) | LightGBM native Booster served by a new `model-service`; gateway calls it inline and falls back to a fixed rule on failure |
+| [0010](docs/adr/0010-observability.md) | Prometheus metrics (framework-agnostic definitions in `fraudguard-common`, cardinality-safe route-template labels) and a Grafana dashboard, provisioned as code |
 
 ---
 

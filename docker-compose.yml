@@ -297,10 +297,70 @@ services:
     logging: *default-logging
     networks: [fraudguard]
 
+  # ---------------------------------------------------------------------------
+  # Prometheus -- scrapes /metrics from every application service (ADR-0010)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: fraudguard-prometheus
+    restart: unless-stopped
+    # No depends_on -- Prometheus's own scrape loop is already the retry
+    # mechanism for a target that isn't up yet; a target shows as "down"
+    # until it answers, then self-corrects on the next 10s scrape. Nothing
+    # here needs to block startup ordering on it.
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    logging: *default-logging
+    networks: [fraudguard]
+
+  # ---------------------------------------------------------------------------
+  # Grafana -- dashboards over Prometheus, provisioned as code (ADR-0010)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: fraudguard-grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      # Local dev only -- anonymous admin access, no signup flow. Never the
+      # production posture (Milestone 29 territory), acceptable here because
+      # nothing this dashboard shows is a secret and the port is not exposed
+      # beyond localhost in a default compose setup.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    logging: *default-logging
+    networks: [fraudguard]
+
 volumes:
   postgres-data:
   redis-data:
   kafka-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   fraudguard:
