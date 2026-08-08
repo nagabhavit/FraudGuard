@@ -2,9 +2,9 @@
 # FraudGuard local development stack.
 # =============================================================================
 #
-# The dashboard is added once it has a Dockerfile (Milestone 12+). A compose
-# file that references a missing Dockerfile fails the entire `up`, so it is
-# deliberately absent until then.
+# The dashboard (Milestone 12, ADR-0012) is the last service below --
+# unauthenticated, reading transactions/decisions from the gateway's
+# GET /v1/transactions.
 #
 # Every stateful service declares a real healthcheck. Application services
 # depend on `condition: service_healthy`, not `service_started` -- without
@@ -195,6 +195,9 @@ services:
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
       FEATURE_SERVICE_URL: http://feature-service:8001
       MODEL_SERVICE_URL: http://model-service:8003
+      # ADR-0012: the browser's origin for the dashboard, not the internal
+      # service name -- CORS is checked against what the browser loaded.
+      DASHBOARD_ORIGIN: http://localhost:${DASHBOARD_PORT:-8080}
     # No healthcheck: block here -- the image declares its own HEALTHCHECK
     # in services/gateway/Dockerfile, unlike the vendored images above, which
     # ship none.
@@ -352,6 +355,36 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    logging: *default-logging
+    networks: [fraudguard]
+
+  # ---------------------------------------------------------------------------
+  # Dashboard -- ops console: recent transactions and their decisions,
+  # unauthenticated by design (ADR-0012, same posture as Grafana above)
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      # ./dashboard, not the repository root -- unlike every Python service,
+      # the dashboard has no shared libs/ dependency (ADR-0003 excludes it
+      # from the uv workspace entirely), so it needs no ADR-0002-style
+      # root build context.
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        # Vite bakes this into the static bundle at build time (see the
+        # Dockerfile) -- deriving it from GATEWAY_PORT here means the two
+        # never drift even if GATEWAY_PORT is overridden in .env.
+        VITE_GATEWAY_URL: http://localhost:${GATEWAY_PORT:-8000}
+    container_name: fraudguard-dashboard
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
+    # No healthcheck: block here -- the image declares its own HEALTHCHECK
+    # in dashboard/Dockerfile, unlike the vendored images above, which ship
+    # none.
     logging: *default-logging
     networks: [fraudguard]
 

@@ -15,8 +15,10 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from fraudguard_common.logging import get_logger
 from fraudguard_common.metrics import record_gateway_decision
@@ -53,6 +55,36 @@ class TransactionDecision(BaseModel):
     risk_score: float
     model_version: str | None
     reason_codes: list[str] | None
+
+
+class DecisionSummary(BaseModel):
+    outcome: DecisionOutcome
+    risk_score: float
+    model_version: str | None
+    reason_codes: list[str] | None
+    decided_at: datetime
+
+
+class TransactionFeedItem(BaseModel):
+    """One row of the dashboard's transaction feed (ADR-0012).
+
+    `decision` is nullable: a transaction can exist without one if the
+    process crashed between the two writes `create_transaction` makes below.
+    """
+
+    transaction_id: UUID
+    account_id: UUID
+    merchant_id: str
+    amount: Decimal
+    currency: str
+    occurred_at: datetime
+    decision: DecisionSummary | None
+
+
+class TransactionFeedPage(BaseModel):
+    items: list[TransactionFeedItem]
+    limit: int
+    offset: int
 
 
 @router.post(
@@ -109,6 +141,52 @@ async def create_transaction(
         model_version=scored.model_version,
         reason_codes=scored.reason_codes,
     )
+
+
+@router.get("/v1/transactions", response_model=TransactionFeedPage)
+async def list_transactions(
+    request: Request,
+    limit: Annotated[int, Query(gt=0, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> TransactionFeedPage:
+    """The dashboard's transaction feed (ADR-0012): most recent first.
+
+    `selectinload` fetches every row's decision in one extra query, not one
+    per row -- an N+1 here would turn a 50-row page into 51 round trips.
+    """
+    async with request.app.state.db.session() as session:
+        result = await session.scalars(
+            select(Transaction)
+            .options(selectinload(Transaction.decision))
+            .order_by(Transaction.occurred_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        transactions = result.all()
+
+    items = [
+        TransactionFeedItem(
+            transaction_id=transaction.id,
+            account_id=transaction.account_id,
+            merchant_id=transaction.merchant_id,
+            amount=transaction.amount,
+            currency=transaction.currency,
+            occurred_at=transaction.occurred_at,
+            decision=(
+                DecisionSummary(
+                    outcome=transaction.decision.outcome,
+                    risk_score=transaction.decision.risk_score,
+                    model_version=transaction.decision.model_version,
+                    reason_codes=transaction.decision.reason_codes,
+                    decided_at=transaction.decision.decided_at,
+                )
+                if transaction.decision is not None
+                else None
+            ),
+        )
+        for transaction in transactions
+    ]
+    return TransactionFeedPage(items=items, limit=limit, offset=offset)
 
 
 async def _publish_transaction_received(

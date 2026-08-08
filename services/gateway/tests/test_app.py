@@ -68,3 +68,43 @@ def test_lifespan_starts_and_stops_the_event_publisher() -> None:
         assert fake_events.stopped is False
 
     assert fake_events.stopped is True
+
+
+# CORS (ADR-0012): a preflight OPTIONS request is answered by CORSMiddleware
+# itself, before routing -- these need no database fake with real query
+# support, unlike an actual GET /v1/transactions call.
+
+
+def test_cors_preflight_allows_the_configured_dashboard_origin() -> None:
+    app = create_app(
+        GatewaySettings(_env_file=None),
+        database=_FakeDatabase(),
+        events=_FakeEventPublisher(),
+    )
+    with TestClient(app) as client:
+        response = client.options(
+            "/v1/transactions",
+            headers={
+                "Origin": "http://localhost:8080",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:8080"
+
+
+def test_cors_preflight_rejects_other_origins() -> None:
+    app = create_app(
+        GatewaySettings(_env_file=None),
+        database=_FakeDatabase(),
+        events=_FakeEventPublisher(),
+    )
+    with TestClient(app) as client:
+        response = client.options(
+            "/v1/transactions",
+            headers={
+                "Origin": "http://evil.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+    assert "access-control-allow-origin" not in response.headers

@@ -39,6 +39,12 @@ class GatewaySettings(LocalDevSettings):
     # is unreachable.
     fallback_amount_threshold: Decimal = Decimal("500.00")
 
+    # ADR-0012: the one browser origin allowed to call GET /v1/transactions.
+    # Matches DASHBOARD_PORT in .env.example. Not a list -- there is exactly
+    # one legitimate caller (the dashboard), and a wildcard would let any
+    # page read transaction data via the browser's fetch API.
+    dashboard_origin: str = "http://localhost:8080"
+
 
 def get_settings() -> GatewaySettings:
     """Construct settings fresh on each call.

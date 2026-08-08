@@ -68,3 +68,24 @@ def test_naive_occurred_at_is_rejected() -> None:
     response = _client().post("/v1/transactions", json=payload)
     assert response.status_code == 422
     assert "timezone" in response.text
+
+
+# GET /v1/transactions (ADR-0012): query-param bounds are validated by
+# FastAPI before the handler runs, the same reason the POST tests above need
+# no database fake -- an out-of-range limit/offset never reaches
+# `request.app.state.db`.
+
+
+def test_limit_must_be_positive() -> None:
+    response = _client().get("/v1/transactions", params={"limit": 0})
+    assert response.status_code == 422
+
+
+def test_limit_cannot_exceed_two_hundred() -> None:
+    response = _client().get("/v1/transactions", params={"limit": 201})
+    assert response.status_code == 422
+
+
+def test_offset_cannot_be_negative() -> None:
+    response = _client().get("/v1/transactions", params={"offset": -1})
+    assert response.status_code == 422

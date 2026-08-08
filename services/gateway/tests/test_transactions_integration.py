@@ -152,6 +152,49 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
         await consumer.stop()
 
 
+async def test_list_transactions_returns_the_transaction_with_its_decision() -> None:
+    """GET /v1/transactions (ADR-0012), against the real Postgres.
+
+    Posts a real transaction, then confirms it round-trips through the feed
+    endpoint with its decision embedded -- the actual `selectinload` join,
+    not a mocked session.
+    """
+    app = create_app(GatewaySettings(_env_file=None))
+    account_id = uuid4()
+    payload = {
+        "account_id": str(account_id),
+        "merchant_id": "integration-test-merchant",
+        "amount": "88.00",
+        "currency": "EUR",
+        "occurred_at": "2026-08-08T09:00:00Z",
+    }
+
+    with TestClient(app) as client:
+        create_response = client.post("/v1/transactions", json=payload)
+        assert create_response.status_code == 200
+        created = create_response.json()
+        transaction_id = created["transaction_id"]
+
+        list_response = client.get("/v1/transactions", params={"limit": 200})
+    assert list_response.status_code == 200
+    body = list_response.json()
+    assert body["limit"] == 200
+    assert body["offset"] == 0
+
+    matching = [
+        item for item in body["items"] if item["transaction_id"] == transaction_id
+    ]
+    assert len(matching) == 1
+    item = matching[0]
+    assert item["account_id"] == str(account_id)
+    assert item["merchant_id"] == "integration-test-merchant"
+    assert item["currency"] == "EUR"
+    assert item["decision"] is not None
+    assert item["decision"]["outcome"] == created["outcome"]
+    assert item["decision"]["risk_score"] == created["risk_score"]
+    assert item["decision"]["model_version"] == created["model_version"]
+
+
 class _UnavailableScoringClient:
     async def get_features(self, account_id: UUID) -> dict[str, int]:
         raise UpstreamUnavailableError("feature-service unreachable")

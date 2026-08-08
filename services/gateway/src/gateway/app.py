@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Protocol
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from fraudguard_common.errors import FraudGuardError
 from fraudguard_common.logging import configure_logging
@@ -103,6 +104,16 @@ def create_app(
     )
 
     app.add_middleware(RequestContextMiddleware, service_name=settings.service_name)
+    # ADR-0012: only the dashboard's own origin, only GET -- it is the one
+    # legitimate browser caller of this API, and the only route it calls is
+    # the read-only transaction feed.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[settings.dashboard_origin],
+        allow_methods=["GET"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
     app.add_exception_handler(FraudGuardError, fraudguard_error_handler)
     app.include_router(health.router)
     app.include_router(metrics.router)

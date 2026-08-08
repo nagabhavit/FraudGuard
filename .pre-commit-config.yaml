@@ -42,6 +42,10 @@ repos:
         args: [--allow-multiple-documents]
       - id: check-toml
       - id: check-json
+        # tsconfig*.json is JSONC by TypeScript's own convention (comments,
+        # e.g. dashboard/tsconfig.node.json's "/* Bundler mode */" section)
+        # -- not malformed JSON, just not what a strict JSON parser accepts.
+        exclude: ^dashboard/tsconfig.*\.json$
       - id: check-added-large-files
         # Model artifacts belong in S3 with a registry row pointing at them.
         # This is the backstop for when someone bypasses .gitignore with -f.

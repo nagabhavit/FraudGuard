@@ -20,7 +20,10 @@ in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 > outcomes, fallback rate) is provisioned as code (ADR-0010). A transaction
 > simulator (`services/simulator`) drives realistic traffic against the real
 > containers and black-box tests verify the hot and cold paths end to end,
-> not just each service in isolation (ADR-0011). Remaining work is tracked in
+> not just each service in isolation (ADR-0011). A React ops dashboard
+> (`dashboard/`) reads a live feed of recent transactions and decisions from
+> a new gateway endpoint, `GET /v1/transactions`, unauthenticated by design
+> (ADR-0012). Remaining work is tracked in
 > [`docs/architecture.md`](docs/architecture.md).
 
 ---
@@ -71,7 +74,7 @@ refreshes what the hot path reads. Full design: [`docs/architecture.md`](docs/ar
 
 - Docker Engine 24+ with Compose v2
 - [uv](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- Node 20+ (dashboard, added in a later milestone)
+- Node 20+ (only if running the dashboard outside Docker; `docker compose up` builds its image itself)
 
 You do **not** need a system Python 3.12. `uv` reads `.python-version` and
 provisions the interpreter itself.
@@ -90,8 +93,8 @@ uv sync --all-packages --all-groups      # reproducible venv from uv.lock
 # disk, and ml/models/ is gitignored -- train one before starting the stack.
 uv run --package fraudguard-ml python ml/pipelines/train.py
 
-docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator, model-service, prometheus, grafana
-docker compose ps         # all ten must report (healthy)
+docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator, model-service, prometheus, grafana, dashboard
+docker compose ps         # all eleven must report (healthy)
 
 # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false -- topics are created explicitly.
 uv run --all-packages python ops/scripts/create_kafka_topics.py
@@ -112,12 +115,18 @@ curl -fsS http://localhost:8002/health/ready   # checks Redis + that the consume
 curl -fsS http://localhost:8003/health/ready   # checks the model loaded at startup
 curl -fsS http://localhost:8000/metrics | head  # Prometheus text format (ADR-0010)
 curl -fsS "http://localhost:9090/api/v1/targets" # every service should show health: "up"
+curl -fsS "http://localhost:8000/v1/transactions?limit=5" # recent transactions + decisions (ADR-0012)
 ```
 
 Open Grafana at <http://localhost:3000> (anonymous admin access, local dev
 only) -- the "FraudGuard Overview" dashboard is provisioned automatically:
 request latency and rate per service, decision outcomes, the degradation
 ladder's fallback rate, and aggregator throughput.
+
+Open the FraudGuard dashboard at <http://localhost:8080> (also unauthenticated,
+local dev only -- ADR-0012) for a live-polling feed of individual transactions
+and their decisions -- the drill-down view Grafana's aggregate panels don't
+give you.
 
 Send a transaction. The gateway scores it inline against feature-service
 and model-service and returns a real decision (ADR-0009); a few seconds
@@ -166,6 +175,13 @@ uv run --package fraudguard-aggregator uvicorn aggregator.asgi:app --reload --po
 uv run --package fraudguard-model-service uvicorn model_service.asgi:app --reload --port 8003
 ```
 
+Run the dashboard locally without Docker (auto-reloads on change; requires the
+gateway reachable at `http://localhost:8000`, its default):
+
+```bash
+cd dashboard && npm install && npm run dev
+```
+
 Tear down:
 
 ```bash
@@ -189,6 +205,17 @@ uv add --package fraudguard-gateway X # add a dependency to one service
 
 There is intentionally no Makefile. With uv these commands are short enough
 that a wrapper would add indirection without saving typing.
+
+`dashboard/` is a plain npm project outside the uv workspace (ADR-0003), so it
+has its own commands, run from `dashboard/`:
+
+```bash
+npm ci           # install, exactly reproducible from package-lock.json
+npm run dev      # local dev server with HMR
+npm run test     # vitest
+npm run lint     # oxlint
+npm run build    # type check (tsc -b) + production build
+```
 
 ### Database migrations
 
@@ -278,6 +305,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0009](docs/adr/0009-model-service-and-hot-path-scoring.md) | LightGBM native Booster served by a new `model-service`; gateway calls it inline and falls back to a fixed rule on failure |
 | [0010](docs/adr/0010-observability.md) | Prometheus metrics (framework-agnostic definitions in `fraudguard-common`, cardinality-safe route-template labels) and a Grafana dashboard, provisioned as code |
 | [0011](docs/adr/0011-transaction-simulator-and-e2e-tests.md) | A new `services/simulator` (no Dockerfile, not a deployed service) generates realistic transaction traffic and drives the first tests that hit the real, containerized gateway and feature-service directly |
+| [0012](docs/adr/0012-dashboard-read-api.md) | The gateway gains a read-only, unauthenticated `GET /v1/transactions` for the new `dashboard/` React ops console, instead of a new query service |
 
 ---
 

@@ -154,6 +154,42 @@ roughly two orders of magnitude once the cold path caught up, with
 evidence the hot and cold paths are correctly connected, not just that
 both individually run without error.
 
+## Dashboard
+
+`dashboard/` (ADR-0012) is a React + TypeScript ops console, outside the uv
+workspace as a plain npm project (ADR-0003) with its own Dockerfile and
+compose entry. It answers the question Grafana's aggregate panels
+structurally cannot: "show me this account's recent transactions and why
+each was scored the way it was." The gateway gains one new endpoint for
+this, `GET /v1/transactions` -- paginated (`limit`/`offset`), ordered by
+`occurred_at` descending, each transaction with its `Decision` embedded
+(`selectinload`, one query, not one per row) -- rather than a new,
+independent read service; the gateway already owns the `fraudguard-db`
+session ADR-0005 built, and this read is cheap enough (indexed Postgres,
+no feature-service/model-service calls) not to compete with the hot path
+for either dependency.
+
+The dashboard polls that endpoint every five seconds and renders a table:
+time, account, merchant, amount, outcome, risk score, model version (or
+"fallback rule" when `model_version` is null -- the same ADR-0005 signal
+the degradation ladder already uses), and reason codes.
+
+**No authentication**, the same posture Grafana already ships with
+(anonymous admin access, local dev only): there is exactly one operator in
+this system's only deployment target, so introducing the system's first
+auth boundary here would conflate a visibility milestone with an
+access-control decision that deserves its own ADR once there is a real
+threat model to design against. CORS on the gateway is scoped to exactly
+one origin (`GatewaySettings.dashboard_origin`, matching `DASHBOARD_PORT`),
+not a wildcard.
+
+Verified against the real stack: `docker compose up -d --build` brings up
+all eleven containers healthy, including `dashboard`; a transaction posted
+to the gateway is visible via `GET /v1/transactions` and in the dashboard's
+own polling feed within one refresh interval; a real browser-style CORS
+preflight and `GET` from the dashboard's origin both return
+`Access-Control-Allow-Origin`, and a different origin gets neither.
+
 ## Current implementation status
 
 | Component | State |
@@ -168,7 +204,7 @@ both individually run without error.
 | Model service / LightGBM training | Implemented — `fraudguard-ml` (feature schema, model artifact, schema-hash validation), `ml/pipelines/train.py` (synthetic data, LightGBM native Booster), `model-service`'s `POST /v1/score` (reason codes via `pred_contrib`); gateway calls it inline, falling back to a fixed rule on failure (ADR-0009) |
 | Observability (Prometheus/Grafana) | Implemented — `fraudguard_common.metrics` (framework-agnostic definitions), `GET /metrics` on all four services, Prometheus + Grafana in `docker-compose.yml`, dashboard and datasource provisioned as code under `ops/` (ADR-0010) |
 | Transaction simulator | Implemented — `services/simulator` (`TransactionFactory` + `driver`, ADR-0011); black-box tests against the real, containerized gateway and feature-service (not in-process apps) verify the hot and cold paths end to end; CI's `integration` job now starts the full application tier, not just infrastructure |
-| Dashboard | Not started |
+| Dashboard | Implemented — `dashboard/` (React + TypeScript, npm project outside the uv workspace, ADR-0003); gateway's new `GET /v1/transactions` (ADR-0012) serves a live-polling feed of transactions and decisions, unauthenticated by design |
 
 ## Milestones
 
@@ -186,7 +222,8 @@ scope is not yet fully specified.
 | 9 | Model service | LightGBM training on synthetic data, inference service, gateway calls it in the hot path |
 | 10 | Observability | Prometheus metrics, latency histograms, a Grafana dashboard |
 | 11 | Simulator + integration tests | Transaction generator, end-to-end tests against the real Compose stack |
-| 12+ | Dashboard, alerts, labels, load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
+| 12 | Dashboard | React ops console; a new gateway read endpoint, `GET /v1/transactions` (ADR-0012) |
+| 13+ | Alerts, labels, load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
 
 ## Degradation ladder
 
@@ -203,7 +240,7 @@ dashboarded in Grafana. What is not yet implemented: a *latency budget*
 distinct from the timeout itself (today, "misses its budget" and "times
 out" are the same bounded-timeout check, not two separate thresholds), and
 alerting on a sustained fallback rate (no Alertmanager yet -- bucketed in
-the 12+ milestone row alongside the dashboard/alerts work).
+the 13+ milestone row's alerts work).
 
 ## Why the split ADRs live separately
 

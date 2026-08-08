@@ -152,11 +152,18 @@ jobs:
       # aggregator consuming into a real feature-service -- earlier
       # milestones' integration tests never needed either running as a
       # container, since they built those services' apps in-process instead.
+      # dashboard joins the list here (Milestone 12, ADR-0012): no test
+      # drives it through a browser yet, but --wait still catches an image
+      # that fails to build or fails its own HEALTHCHECK -- exactly the
+      # class of bug (a container-only IPv6/localhost healthcheck failure)
+      # found by running this container for real while building this
+      # milestone, which `npm run build` in the `dashboard` job above
+      # cannot see.
       - name: Start the stack
         run: >
           docker compose up -d --wait --build
           postgres redis kafka schema-registry feature-service model-service
-          gateway aggregator
+          gateway aggregator dashboard
       # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false (docker-compose.yml) and
       # this is a fresh cluster with no persisted topics, unlike a
       # developer's long-running local stack. gateway's own healthcheck
@@ -171,6 +178,37 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  dashboard:
+    name: Dashboard (lint, typecheck, test, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # A separate job, not folded into `lint`/`typecheck`/`test` above: those
+    # are uv-workspace jobs (astral-sh/setup-uv, `uv run`) and the dashboard
+    # is a plain npm project outside that workspace by design (ADR-0003) --
+    # sharing a job would mean installing both toolchains in one runner for
+    # no benefit over two jobs that already run in parallel.
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      # tsc -b (part of `npm run build`) is this project's type check --
+      # there is no separate `tsc --noEmit` step for the same reason the
+      # Python jobs above don't run mypy twice.
+      - name: Test
+        run: npm run test
+      - name: Build
+        run: npm run build
 
   hooks:
     name: Pre-commit hooks
@@ -195,7 +233,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [lockfile, lint, typecheck, test, integration, hooks]
+    needs: [lockfile, lint, typecheck, test, integration, dashboard, hooks]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
