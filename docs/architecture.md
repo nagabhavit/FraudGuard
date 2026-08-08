@@ -119,6 +119,35 @@ Prometheus's own target list, the Grafana dashboard's datasource and six
 panels are provisioned and queryable, and a real `POST /v1/transactions`
 is visible end to end as a PromQL query result within one scrape interval.
 
+## Alerting
+
+Prometheus Alertmanager (ADR-0013) joins `docker-compose.yml`, configured
+as code under `ops/alertmanager/` -- the same "`docker compose up` produces
+a working setup, no manual click-through" pattern ADR-0010 already
+established for Prometheus and Grafana. Five rules in
+`ops/prometheus/rules/fraudguard.rules.yml` (loaded via Prometheus's
+`rule_files`) cover: the degradation ladder's fallback rate; a sustained
+hot-path latency-budget breach rate
+(`fraudguard_gateway_scoring_budget_exceeded_total`, a new metric --
+distinct from the 2s `scoring_timeout_seconds` check, this is the
+README's actual p99 <= 100ms budget); any of the four application services
+being unreachable; the aggregator's poison-message rate (ADR-0008); and
+Kafka publish failures (`fraudguard_gateway_kafka_publish_total`, a new
+metric closing ADR-0006's previously log-only "persisted but never
+published" gap).
+
+Alertmanager's one receiver is a null/log receiver -- local dev, one
+operator, the same posture Grafana's and the dashboard's anonymous access
+already have (ADR-0010, ADR-0012). A firing alert is visible at
+`http://localhost:9093` but pages no one; wiring a real notification
+integration is future work for a non-local deployment.
+
+Verified against the real stack: `docker compose up -d --build` brings up
+all twelve containers healthy, including `alertmanager`; Prometheus's
+`/api/v1/rules` reports all five rules loaded with no errors, and
+Alertmanager's `/api/v2/alerts` reflects a rule's state change end to end
+when it is forced to fire.
+
 ## Transaction simulator and end-to-end tests
 
 `services/simulator` (ADR-0011) generates realistic transaction traffic --
@@ -203,6 +232,7 @@ preflight and `GET` from the dashboard's origin both return
 | Stream aggregator | Implemented — `services/aggregator` consumes `fraudguard.transactions.v1` and maintains the Redis feature store (ADR-0008). Full cold path (gateway → Kafka → aggregator → Redis → feature-service) verified across real containers |
 | Model service / LightGBM training | Implemented — `fraudguard-ml` (feature schema, model artifact, schema-hash validation), `ml/pipelines/train.py` (synthetic data, LightGBM native Booster), `model-service`'s `POST /v1/score` (reason codes via `pred_contrib`); gateway calls it inline, falling back to a fixed rule on failure (ADR-0009) |
 | Observability (Prometheus/Grafana) | Implemented — `fraudguard_common.metrics` (framework-agnostic definitions), `GET /metrics` on all four services, Prometheus + Grafana in `docker-compose.yml`, dashboard and datasource provisioned as code under `ops/` (ADR-0010) |
+| Alerting (Alertmanager) | Implemented — `ops/alertmanager/` (null/log receiver, ADR-0013), five rules in `ops/prometheus/rules/fraudguard.rules.yml` covering the fallback rate, a new hot-path latency-budget-exceeded metric, service health, aggregator poison messages, and a new Kafka-publish-failure metric |
 | Transaction simulator | Implemented — `services/simulator` (`TransactionFactory` + `driver`, ADR-0011); black-box tests against the real, containerized gateway and feature-service (not in-process apps) verify the hot and cold paths end to end; CI's `integration` job now starts the full application tier, not just infrastructure |
 | Dashboard | Implemented — `dashboard/` (React + TypeScript, npm project outside the uv workspace, ADR-0003); gateway's new `GET /v1/transactions` (ADR-0012) serves a live-polling feed of transactions and decisions, unauthenticated by design |
 
@@ -223,7 +253,8 @@ scope is not yet fully specified.
 | 10 | Observability | Prometheus metrics, latency histograms, a Grafana dashboard |
 | 11 | Simulator + integration tests | Transaction generator, end-to-end tests against the real Compose stack |
 | 12 | Dashboard | React ops console; a new gateway read endpoint, `GET /v1/transactions` (ADR-0012) |
-| 13+ | Alerts, labels, load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
+| 13 | Alerting | Prometheus Alertmanager, alert rules for the degradation ladder and pipeline health, a hot-path latency budget distinct from the timeout (ADR-0013) |
+| 14+ | Labels, load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
 
 ## Degradation ladder
 
@@ -236,11 +267,13 @@ decision is still persisted as a real `Decision` row, with
 `model_version = NULL` -- the existing (Milestone 5) signal that a rule,
 not the model, produced it. How often it fires is now a live metric,
 `fraudguard_gateway_decisions_total{used_model="false"}` (ADR-0010),
-dashboarded in Grafana. What is not yet implemented: a *latency budget*
-distinct from the timeout itself (today, "misses its budget" and "times
-out" are the same bounded-timeout check, not two separate thresholds), and
-alerting on a sustained fallback rate (no Alertmanager yet -- bucketed in
-the 13+ milestone row's alerts work).
+dashboarded in Grafana, and now alertable: `FraudGuardSustainedFallbackRate`
+fires when it exceeds 20% of decisions over 5 minutes (ADR-0013). The
+latency budget is also now distinct from the timeout itself:
+`GatewaySettings.scoring_budget_ms` (100ms, separate from the 2s
+`scoring_timeout_seconds`) is checked on every scored transaction, whether
+or not it fell back, and a sustained breach is its own alert,
+`FraudGuardHotPathBudgetBreaches` (ADR-0013). See "Alerting" below.
 
 ## Why the split ADRs live separately
 

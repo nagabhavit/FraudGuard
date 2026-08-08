@@ -21,7 +21,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from fraudguard_common.logging import get_logger
-from fraudguard_common.metrics import record_gateway_decision
+from fraudguard_common.metrics import (
+    record_gateway_decision,
+    record_gateway_kafka_publish,
+)
 from fraudguard_db.models import Decision, DecisionOutcome, Transaction
 from fraudguard_events import TRANSACTIONS_V1
 from gateway.scoring import score_transaction
@@ -114,6 +117,7 @@ async def create_transaction(
         account_id=transaction.account_id,
         amount=transaction.amount,
         fallback_threshold=settings.fallback_amount_threshold,
+        budget_ms=settings.scoring_budget_ms,
     )
 
     decision = Decision(
@@ -221,3 +225,6 @@ async def _publish_transaction_received(
             "failed to publish transaction event",
             extra={"transaction_id": str(transaction.id)},
         )
+        record_gateway_kafka_publish(outcome="failure")
+        return
+    record_gateway_kafka_publish(outcome="success")

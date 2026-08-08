@@ -18,6 +18,7 @@ import httpx2 as httpx
 import pytest
 
 from fraudguard_common.errors import UpstreamTimeoutError, UpstreamUnavailableError
+from fraudguard_common.metrics import render_metrics
 from fraudguard_db.models import DecisionOutcome
 from gateway.scoring import HttpScoringClient, score_transaction
 
@@ -78,6 +79,7 @@ async def test_success_maps_the_model_response_onto_a_scored_decision() -> None:
         account_id=_ACCOUNT_ID,
         amount=Decimal("42.50"),
         fallback_threshold=Decimal("500.00"),
+        budget_ms=100.0,
     )
     assert scored.outcome == DecisionOutcome.DECLINE
     assert scored.risk_score == 0.93
@@ -100,6 +102,7 @@ async def test_success_forwards_the_transaction_amount_and_looked_up_features() 
         account_id=_ACCOUNT_ID,
         amount=Decimal("99.00"),
         fallback_threshold=Decimal("500.00"),
+        budget_ms=100.0,
     )
     assert client.score_call == {
         "amount": Decimal("99.00"),
@@ -129,6 +132,7 @@ async def test_feature_service_failure_falls_back_on_amount(
         account_id=_ACCOUNT_ID,
         amount=amount,
         fallback_threshold=Decimal("500.00"),
+        budget_ms=100.0,
     )
     assert scored.outcome == expected_outcome
     assert scored.model_version is None
@@ -144,6 +148,7 @@ async def test_model_service_timeout_falls_back() -> None:
         account_id=_ACCOUNT_ID,
         amount=Decimal("10.00"),
         fallback_threshold=Decimal("500.00"),
+        budget_ms=100.0,
     )
     assert scored.outcome == DecisionOutcome.APPROVE
     assert scored.model_version is None
@@ -158,6 +163,7 @@ async def test_model_service_error_response_falls_back() -> None:
         account_id=_ACCOUNT_ID,
         amount=Decimal("501.00"),
         fallback_threshold=Decimal("500.00"),
+        budget_ms=100.0,
     )
     assert scored.outcome == DecisionOutcome.REVIEW
     assert scored.model_version is None
@@ -173,9 +179,65 @@ async def test_malformed_model_response_falls_back() -> None:
         account_id=_ACCOUNT_ID,
         amount=Decimal("10.00"),
         fallback_threshold=Decimal("500.00"),
+        budget_ms=100.0,
     )
     assert scored.outcome == DecisionOutcome.APPROVE
     assert scored.model_version is None
+
+
+def _budget_exceeded_count(rendered: bytes) -> float:
+    prefix = "fraudguard_gateway_scoring_budget_exceeded_total "
+    for line in rendered.decode().splitlines():
+        if line.startswith(prefix):
+            return float(line.removeprefix(prefix))
+    return 0.0
+
+
+async def test_scoring_within_budget_does_not_flag_budget_exceeded() -> None:
+    client = _FakeScoringClient()
+    before = _budget_exceeded_count(render_metrics()[0])
+    await score_transaction(
+        client,
+        account_id=_ACCOUNT_ID,
+        amount=Decimal("10.00"),
+        fallback_threshold=Decimal("500.00"),
+        budget_ms=100_000.0,
+    )
+    after = _budget_exceeded_count(render_metrics()[0])
+    assert after == before
+
+
+async def test_scoring_over_budget_flags_budget_exceeded() -> None:
+    # budget_ms=-1.0 guarantees any non-negative latency exceeds it, without
+    # relying on a real slow dependency to observe the signal.
+    client = _FakeScoringClient()
+    before = _budget_exceeded_count(render_metrics()[0])
+    await score_transaction(
+        client,
+        account_id=_ACCOUNT_ID,
+        amount=Decimal("10.00"),
+        fallback_threshold=Decimal("500.00"),
+        budget_ms=-1.0,
+    )
+    after = _budget_exceeded_count(render_metrics()[0])
+    assert after == before + 1.0
+
+
+async def test_fallback_over_budget_also_flags_budget_exceeded() -> None:
+    # The fallback path computes its own latency_ms independently of the
+    # success path -- covered separately so one implementation cannot
+    # silently stop checking the other.
+    client = _FakeScoringClient(features_error=UpstreamUnavailableError("down"))
+    before = _budget_exceeded_count(render_metrics()[0])
+    await score_transaction(
+        client,
+        account_id=_ACCOUNT_ID,
+        amount=Decimal("10.00"),
+        fallback_threshold=Decimal("500.00"),
+        budget_ms=-1.0,
+    )
+    after = _budget_exceeded_count(render_metrics()[0])
+    assert after == before + 1.0
 
 
 def _http_client_with_transports(

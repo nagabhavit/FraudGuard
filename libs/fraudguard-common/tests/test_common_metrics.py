@@ -23,6 +23,8 @@ from fraudguard_common.metrics import (
     observe_http_request,
     record_aggregator_message,
     record_gateway_decision,
+    record_gateway_kafka_publish,
+    record_gateway_scoring_budget_exceeded,
     render_metrics,
 )
 
@@ -47,6 +49,8 @@ def test_render_metrics_returns_bytes_containing_known_metric_names() -> None:
     assert b"fraudguard_http_request_duration_seconds" in body
     assert b"fraudguard_gateway_decisions_total" in body
     assert b"fraudguard_gateway_scoring_duration_seconds" in body
+    assert b"fraudguard_gateway_scoring_budget_exceeded_total" in body
+    assert b"fraudguard_gateway_kafka_publish_total" in body
     assert b"fraudguard_aggregator_messages_total" in body
 
 
@@ -104,6 +108,41 @@ def test_observe_gateway_scoring_duration_increments_the_histogram_count() -> No
     observe_gateway_scoring_duration(0.012)
     after = _sample_value(
         render_metrics()[0], "fraudguard_gateway_scoring_duration_seconds_count"
+    )
+    assert after == before + 1.0
+
+
+def test_record_gateway_scoring_budget_exceeded_increments_the_counter() -> None:
+    before = _sample_value(
+        render_metrics()[0], "fraudguard_gateway_scoring_budget_exceeded_total"
+    )
+    record_gateway_scoring_budget_exceeded()
+    after = _sample_value(
+        render_metrics()[0], "fraudguard_gateway_scoring_budget_exceeded_total"
+    )
+    assert after == before + 1.0
+
+
+def test_record_gateway_kafka_publish_counts_by_outcome() -> None:
+    labels = {"outcome": "success"}
+    before = _sample_value(
+        render_metrics()[0], "fraudguard_gateway_kafka_publish_total", **labels
+    )
+    record_gateway_kafka_publish(outcome="success")
+    after = _sample_value(
+        render_metrics()[0], "fraudguard_gateway_kafka_publish_total", **labels
+    )
+    assert after == before + 1.0
+
+
+def test_record_gateway_kafka_publish_distinguishes_failure_outcome() -> None:
+    labels = {"outcome": "failure"}
+    before = _sample_value(
+        render_metrics()[0], "fraudguard_gateway_kafka_publish_total", **labels
+    )
+    record_gateway_kafka_publish(outcome="failure")
+    after = _sample_value(
+        render_metrics()[0], "fraudguard_gateway_kafka_publish_total", **labels
     )
     assert after == before + 1.0
 

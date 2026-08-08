@@ -315,9 +315,34 @@ services:
       - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    logging: *default-logging
+    networks: [fraudguard]
+
+  # ---------------------------------------------------------------------------
+  # Alertmanager -- routes firing alerts from Prometheus's rule evaluation
+  # (ops/prometheus/rules/). Local dev only: a null/log receiver, nothing
+  # pages a real person (ADR-0013, same posture as Grafana's anonymous
+  # access below).
+  # ---------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    container_name: fraudguard-alertmanager
+    restart: unless-stopped
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./ops/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -394,6 +419,7 @@ volumes:
   kafka-data:
   prometheus-data:
   grafana-data:
+  alertmanager-data:
 
 networks:
   fraudguard:

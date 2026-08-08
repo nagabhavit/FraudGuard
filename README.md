@@ -23,8 +23,11 @@ in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 > not just each service in isolation (ADR-0011). A React ops dashboard
 > (`dashboard/`) reads a live feed of recent transactions and decisions from
 > a new gateway endpoint, `GET /v1/transactions`, unauthenticated by design
-> (ADR-0012). Remaining work is tracked in
-> [`docs/architecture.md`](docs/architecture.md).
+> (ADR-0012). Prometheus Alertmanager now fires on a sustained fallback
+> rate, a hot-path latency-budget breach distinct from an outright timeout,
+> any service being down, aggregator poison messages, and Kafka publish
+> failures -- a null/log receiver, local dev only (ADR-0013). Remaining
+> work is tracked in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -65,6 +68,7 @@ refreshes what the hot path reads. Full design: [`docs/architecture.md`](docs/ar
 | Schema governance | Confluent Schema Registry + fastavro | BACKWARD compatibility enforced at the broker, not just in CI; hand-rolled wire-format codec avoids a native `librdkafka` dependency (ADR-0006) |
 | Model | LightGBM | Gradient-boosted trees beat deep learning on tabular fraud data, train in minutes, infer in single-digit ms, and produce SHAP explanations regulators accept |
 | Metrics | Prometheus + Grafana | Pull-based scraping needs no push client or retry logic in the hot path; provisioned as code so `docker compose up` yields a working dashboard (ADR-0010) |
+| Alerting | Prometheus Alertmanager | Same pull-based ecosystem as metrics; provisioned as code, a null/log receiver for this local, single-operator deployment (ADR-0013) |
 | Dashboard | React + TypeScript | Type safety across the API boundary |
 | Packaging | uv workspace | One lockfile, per-service dependency subtrees |
 
@@ -93,8 +97,8 @@ uv sync --all-packages --all-groups      # reproducible venv from uv.lock
 # disk, and ml/models/ is gitignored -- train one before starting the stack.
 uv run --package fraudguard-ml python ml/pipelines/train.py
 
-docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator, model-service, prometheus, grafana, dashboard
-docker compose ps         # all eleven must report (healthy)
+docker compose up -d      # postgres, redis, kafka, schema registry, gateway, feature-service, aggregator, model-service, prometheus, alertmanager, grafana, dashboard
+docker compose ps         # all twelve must report (healthy)
 
 # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false -- topics are created explicitly.
 uv run --all-packages python ops/scripts/create_kafka_topics.py
@@ -115,6 +119,8 @@ curl -fsS http://localhost:8002/health/ready   # checks Redis + that the consume
 curl -fsS http://localhost:8003/health/ready   # checks the model loaded at startup
 curl -fsS http://localhost:8000/metrics | head  # Prometheus text format (ADR-0010)
 curl -fsS "http://localhost:9090/api/v1/targets" # every service should show health: "up"
+curl -fsS "http://localhost:9090/api/v1/rules"   # five alert rules, no errors (ADR-0013)
+curl -fsS "http://localhost:9093/api/v2/status"  # Alertmanager is up
 curl -fsS "http://localhost:8000/v1/transactions?limit=5" # recent transactions + decisions (ADR-0012)
 ```
 
@@ -122,6 +128,12 @@ Open Grafana at <http://localhost:3000> (anonymous admin access, local dev
 only) -- the "FraudGuard Overview" dashboard is provisioned automatically:
 request latency and rate per service, decision outcomes, the degradation
 ladder's fallback rate, and aggregator throughput.
+
+Open Alertmanager at <http://localhost:9093> (also local dev only -- no
+notification integration is configured, ADR-0013) to see firing alerts:
+`FraudGuardSustainedFallbackRate`, `FraudGuardHotPathBudgetBreaches`,
+`FraudGuardServiceDown`, `FraudGuardAggregatorPoisonMessages`, and
+`FraudGuardKafkaPublishFailures`.
 
 Open the FraudGuard dashboard at <http://localhost:8080> (also unauthenticated,
 local dev only -- ADR-0012) for a live-polling feed of individual transactions
@@ -263,7 +275,7 @@ dashboard/    react operations console (npm project, not a uv member)
 db/           alembic migrations and seed data
 ml/           training pipelines and model artifacts (artifacts gitignored)
 infra/        terraform modules and kubernetes manifests
-ops/          prometheus, grafana, load tests, chaos experiments, scripts
+ops/          prometheus, alertmanager, grafana, load tests, chaos experiments, scripts
 docs/         architecture decision records and runbooks
 ```
 
@@ -306,6 +318,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0010](docs/adr/0010-observability.md) | Prometheus metrics (framework-agnostic definitions in `fraudguard-common`, cardinality-safe route-template labels) and a Grafana dashboard, provisioned as code |
 | [0011](docs/adr/0011-transaction-simulator-and-e2e-tests.md) | A new `services/simulator` (no Dockerfile, not a deployed service) generates realistic transaction traffic and drives the first tests that hit the real, containerized gateway and feature-service directly |
 | [0012](docs/adr/0012-dashboard-read-api.md) | The gateway gains a read-only, unauthenticated `GET /v1/transactions` for the new `dashboard/` React ops console, instead of a new query service |
+| [0013](docs/adr/0013-alerting.md) | Prometheus Alertmanager (a null/log receiver, local dev only) with five alert rules; new metrics close the hot-path-budget-vs-timeout gap and the Kafka-publish-failure gap |
 
 ---
 

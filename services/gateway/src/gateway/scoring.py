@@ -32,7 +32,10 @@ from fraudguard_common.errors import (
     UpstreamUnavailableError,
 )
 from fraudguard_common.logging import get_logger
-from fraudguard_common.metrics import observe_gateway_scoring_duration
+from fraudguard_common.metrics import (
+    observe_gateway_scoring_duration,
+    record_gateway_scoring_budget_exceeded,
+)
 from fraudguard_db.models import DecisionOutcome
 
 logger = get_logger(__name__)
@@ -156,6 +159,21 @@ async def _send(
     return response
 
 
+def _observe_scoring_latency(latency_ms: float, *, budget_ms: float) -> None:
+    """Record the full latency distribution, plus a distinct budget signal.
+
+    ADR-0013: "timed out" (the 2s `scoring_timeout_seconds`) and "missed the
+    README's p99 <= 100ms hot-path budget" are different thresholds -- a
+    request that returns well inside the timeout can still have missed the
+    budget. Checked here, once, so both the success and fallback paths below
+    (a fallback can itself take up to the timeout to be triggered) get the
+    same signal.
+    """
+    observe_gateway_scoring_duration(latency_ms / 1000)
+    if latency_ms > budget_ms:
+        record_gateway_scoring_budget_exceeded()
+
+
 def _fallback_outcome(amount: Decimal, *, threshold: Decimal) -> DecisionOutcome:
     return DecisionOutcome.REVIEW if amount > threshold else DecisionOutcome.APPROVE
 
@@ -182,6 +200,7 @@ async def score_transaction(
     account_id: UUID,
     amount: Decimal,
     fallback_threshold: Decimal,
+    budget_ms: float,
 ) -> ScoredDecision:
     start = time.monotonic()
     try:
@@ -211,10 +230,10 @@ async def score_transaction(
             extra={"account_id": str(account_id)},
         )
         latency_ms = (time.monotonic() - start) * 1000
-        observe_gateway_scoring_duration(latency_ms / 1000)
+        _observe_scoring_latency(latency_ms, budget_ms=budget_ms)
         return _fallback_decision(
             amount, threshold=fallback_threshold, latency_ms=latency_ms
         )
 
-    observe_gateway_scoring_duration(scored.latency_ms / 1000)
+    _observe_scoring_latency(scored.latency_ms, budget_ms=budget_ms)
     return scored

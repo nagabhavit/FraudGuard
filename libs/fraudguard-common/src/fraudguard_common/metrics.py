@@ -44,6 +44,27 @@ GATEWAY_SCORING_DURATION_SECONDS = Histogram(
     "Time spent scoring one transaction against feature-service and model-service.",
 )
 
+#: ADR-0013: distinct from the hard timeout (`scoring_timeout_seconds`,
+#: currently 2s) -- a request that comes back well inside the timeout can
+#: still have missed the README's p99 <= 100ms hot-path budget. This counts
+#: every transaction whose scoring latency exceeded that budget, whether or
+#: not it ultimately timed out, so a sustained budget miss is alertable
+#: separately from an outright dependency failure.
+GATEWAY_SCORING_BUDGET_EXCEEDED_TOTAL = Counter(
+    "fraudguard_gateway_scoring_budget_exceeded_total",
+    "Transactions whose scoring latency exceeded the hot-path budget.",
+)
+
+#: ADR-0006's accepted gap made concrete: a transaction can be durably
+#: persisted in Postgres without ever reaching Kafka if the publish fails.
+#: That gap previously produced only a log line -- this is the counter that
+#: makes it alertable (ADR-0013).
+GATEWAY_KAFKA_PUBLISH_TOTAL = Counter(
+    "fraudguard_gateway_kafka_publish_total",
+    "TransactionReceived publishes to Kafka, by outcome.",
+    labelnames=("outcome",),
+)
+
 #: ADR-0008's poison-message handling: "skipped" means a message was
 #: decoded-but-failed or undecodable and was logged and skipped, not retried.
 AGGREGATOR_MESSAGES_TOTAL = Counter(
@@ -73,6 +94,14 @@ def record_gateway_decision(*, outcome: str, model_version: str | None) -> None:
 
 def observe_gateway_scoring_duration(duration_seconds: float) -> None:
     GATEWAY_SCORING_DURATION_SECONDS.observe(duration_seconds)
+
+
+def record_gateway_scoring_budget_exceeded() -> None:
+    GATEWAY_SCORING_BUDGET_EXCEEDED_TOTAL.inc()
+
+
+def record_gateway_kafka_publish(*, outcome: str) -> None:
+    GATEWAY_KAFKA_PUBLISH_TOTAL.labels(outcome=outcome).inc()
 
 
 def record_aggregator_message(*, outcome: str) -> None:

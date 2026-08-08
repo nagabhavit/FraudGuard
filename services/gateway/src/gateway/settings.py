@@ -34,6 +34,12 @@ class GatewaySettings(LocalDevSettings):
     # networking, not tuned to the README's p99 <= 100ms budget.
     scoring_timeout_seconds: float = 2.0
 
+    # ADR-0013: distinct from scoring_timeout_seconds above -- the README's
+    # actual hot-path budget. A request that returns well inside the 2s
+    # timeout can still have missed this, which is exactly the signal the
+    # timeout alone cannot give the degradation ladder.
+    scoring_budget_ms: float = 100.0
+
     # ADR-0009's degradation-ladder fallback: above this amount -> review,
     # otherwise -> approve, used only when feature-service or model-service
     # is unreachable.

@@ -1,0 +1,117 @@
+# Alert rules. See ADR-0013.
+#
+# Thresholds and "for" durations below are deliberately illustrative, not
+# derived from a real production incident history -- this project has none
+# (CI trains a fresh model and the simulator drives synthetic traffic every
+# run, ADR-0011). They are chosen to be loose enough not to fire on normal
+# startup noise (every service briefly flaps while dependencies come up)
+# but tight enough to demonstrate a real alert firing when a dependency is
+# actually degraded or down. Revisit with real thresholds once real traffic
+# and a real incident history exist to calibrate against.
+#
+# Every ratio-based rule divides by its own denominator's rate() rather than
+# a fixed number, so an alert's meaning does not depend on traffic volume:
+# "20% of decisions are fallbacks" means the same thing at 1 tx/s and at
+# 1000 tx/s. Division by zero (no traffic in the window) produces NaN in
+# PromQL, which no comparison operator matches -- an idle stack does not
+# spuriously fire any rule here.
+
+groups:
+  - name: fraudguard.rules
+    rules:
+      # ADR-0009's degradation ladder, ADR-0010's fallback-rate metric,
+      # finally alertable (architecture.md's degradation-ladder section
+      # named this exact gap).
+      - alert: FraudGuardSustainedFallbackRate
+        expr: |
+          (
+            sum(rate(fraudguard_gateway_decisions_total{used_model="false"}[5m]))
+            /
+            sum(rate(fraudguard_gateway_decisions_total[5m]))
+          ) > 0.20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway is falling back to the fixed rule for over 20% of decisions"
+          description: >-
+            feature-service or model-service has been unavailable or
+            erroring long enough that more than one in five transactions
+            over the last 5 minutes was scored by the fallback rule
+            (ADR-0009), not the model.
+
+      # ADR-0013: distinct from an outright timeout -- requests are
+      # completing, just not within the README's p99 <= 100ms hot-path
+      # budget (fraudguard_gateway_scoring_budget_exceeded_total).
+      - alert: FraudGuardHotPathBudgetBreaches
+        expr: |
+          (
+            sum(rate(fraudguard_gateway_scoring_budget_exceeded_total[5m]))
+            /
+            sum(rate(fraudguard_gateway_scoring_duration_seconds_count[5m]))
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 10% of transactions are missing the 100ms hot-path budget"
+          description: >-
+            Scoring is completing (not timing out) but exceeding
+            GatewaySettings.scoring_budget_ms for more than one in ten
+            transactions over the last 5 minutes -- the hot path is slow,
+            not down.
+
+      # Any of the four application services being unreachable by
+      # Prometheus's own scrape.
+      - alert: FraudGuardServiceDown
+        expr: up{job=~"gateway|feature-service|aggregator|model-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} has been unreachable for over a minute"
+          description: >-
+            Prometheus has failed to scrape {{ $labels.job }}'s /metrics for
+            over a minute -- the container is down, crash-looping, or its
+            health check is failing.
+
+      # ADR-0008's poison-message handling, made alertable: "skipped" should
+      # be rare (a schema mismatch BACKWARD compatibility should have
+      # already prevented, per the ADR); a sustained rate means it isn't.
+      - alert: FraudGuardAggregatorPoisonMessages
+        expr: |
+          (
+            sum(rate(fraudguard_aggregator_messages_total{outcome="skipped"}[5m]))
+            /
+            sum(rate(fraudguard_aggregator_messages_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Aggregator is skipping over 5% of Kafka messages"
+          description: >-
+            More than one in twenty messages on fraudguard.transactions.v1
+            over the last 5 minutes failed to decode or apply (ADR-0008) --
+            a likely schema or Redis problem, not isolated bad messages.
+
+      # ADR-0006's accepted gap ("persisted but never published") made
+      # alertable via the counter this milestone added
+      # (fraudguard_gateway_kafka_publish_total).
+      - alert: FraudGuardKafkaPublishFailures
+        expr: |
+          (
+            sum(rate(fraudguard_gateway_kafka_publish_total{outcome="failure"}[5m]))
+            /
+            sum(rate(fraudguard_gateway_kafka_publish_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 5% of transaction events are failing to publish to Kafka"
+          description: >-
+            Transactions are still being durably persisted to Postgres
+            (ADR-0005) and still being scored, but more than one in twenty
+            are not reaching Kafka -- the cold path (aggregator, feature
+            store, future training) is falling behind or missing data.

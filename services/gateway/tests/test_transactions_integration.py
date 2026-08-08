@@ -90,6 +90,9 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
         scoring_duration_count_before = _metric_value(
             "fraudguard_gateway_scoring_duration_seconds_count"
         )
+        kafka_publish_success_before = _metric_value(
+            "fraudguard_gateway_kafka_publish_total", outcome="success"
+        )
 
         with TestClient(app) as client:
             response = client.post("/v1/transactions", json=payload)
@@ -113,6 +116,10 @@ async def test_create_transaction_persists_and_publishes_for_real() -> None:
             "fraudguard_gateway_scoring_duration_seconds_count"
         )
         assert scoring_duration_count_after == scoring_duration_count_before + 1.0
+        kafka_publish_success_after = _metric_value(
+            "fraudguard_gateway_kafka_publish_total", outcome="success"
+        )
+        assert kafka_publish_success_after == kafka_publish_success_before + 1.0
 
         db = Database(DatabaseSettings())
         try:
