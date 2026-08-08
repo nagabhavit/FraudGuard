@@ -47,7 +47,7 @@ fraudguard-ml = { workspace = true }
 # The pin must also stay in step with the rev in .pre-commit-config.yaml.
 [dependency-groups]
 lint = ["ruff==0.14.6"]
-typecheck = ["mypy>=1.18,<2"]
+typecheck = ["mypy>=2.3.0,<3"]
 test = [
     "pytest>=9.0.3,<10", # 8.x has PYSEC-2026-1845
     "pytest-asyncio>=1.2,<2",
