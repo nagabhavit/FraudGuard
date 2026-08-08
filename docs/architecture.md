@@ -36,6 +36,19 @@ Declared as code in `fraudguard_events.topics`, created explicitly by
 Schema Registry. See ADR-0006 for the client and serialization choices, and
 why a failed publish does not fail the request.
 
+**Known gap, found via Milestone 11's real-stack testing, not yet fixed:**
+"does not fail the request" is true, but a publish to a *missing* topic was
+observed taking on the order of 30+ seconds to give up and log the
+failure, not a bounded few milliseconds -- `aiokafka`'s own metadata-retry
+behavior, not application code, is what's slow here. This does not fail
+correctness (Postgres, written first, is still the system of record) but it
+does mean a missing topic silently violates the hot path's p99 <= 100 ms
+budget for whichever request happens to hit it, which "does not fail the
+request" alone does not capture. `docker-compose.yml`'s topic-creation step
+always runs before the stack is used in this project's own CI and local
+workflows, so this has not been observed causing a real failure -- it is
+recorded here as a known risk, not an incident.
+
 ## Feature store
 
 | Signal | Structure | Key | Read |
@@ -106,6 +119,41 @@ Prometheus's own target list, the Grafana dashboard's datasource and six
 panels are provisioned and queryable, and a real `POST /v1/transactions`
 is visible end to end as a PromQL query result within one scrape interval.
 
+## Transaction simulator and end-to-end tests
+
+`services/simulator` (ADR-0011) generates realistic transaction traffic --
+a seeded pool of accounts split 90% "normal" / 10% "bursty" (the same idea
+`ml/pipelines/train.py` uses for training data, applied one layer up: raw
+`TransactionCreate` fields, not feature vectors) -- and sends it to a
+running gateway. Generation (`TransactionFactory`) and sending (`driver`)
+are separate pieces on purpose, so later load-testing work can drive the
+same factory harder without a second implementation.
+
+This is also the first milestone whose tests reach the actual *containers*
+`docker compose up` starts, not an in-process `create_app()` + `TestClient`
+the way every earlier integration test does. Two black-box tests in
+`services/simulator/tests/test_end_to_end_integration.py`: one posts a
+batch of realistic transactions straight to the real gateway container and
+checks each decision's shape (a valid outcome, `risk_score` in `[0, 1]`,
+`model_version` present with real reason codes exactly when the model --
+not the fallback rule -- scored it); the other posts several transactions
+for one account, then polls the real feature-service container until its
+velocity reflects them -- the same proof the aggregator's
+`test_full_pipeline_integration.py` already makes in-process, now made
+against the actual deployed containers. Assertions are structural, not
+exact outcomes: CI trains a fresh model every run, so pinning a test to
+"this payload always declines" would couple the suite to one run's
+randomly-trained model instead of the contract the gateway promises.
+
+Verified against the real stack: `uv run --package fraudguard-simulator
+python -m simulator` against the live compose stack returns real decisions
+for every transaction sent; a manually-triggered burst for one account was
+confirmed, by direct inspection, to raise that account's `risk_score` by
+roughly two orders of magnitude once the cold path caught up, with
+`reason_codes` correctly naming the velocity features responsible -- real
+evidence the hot and cold paths are correctly connected, not just that
+both individually run without error.
+
 ## Current implementation status
 
 | Component | State |
@@ -119,7 +167,7 @@ is visible end to end as a PromQL query result within one scrape interval.
 | Stream aggregator | Implemented — `services/aggregator` consumes `fraudguard.transactions.v1` and maintains the Redis feature store (ADR-0008). Full cold path (gateway → Kafka → aggregator → Redis → feature-service) verified across real containers |
 | Model service / LightGBM training | Implemented — `fraudguard-ml` (feature schema, model artifact, schema-hash validation), `ml/pipelines/train.py` (synthetic data, LightGBM native Booster), `model-service`'s `POST /v1/score` (reason codes via `pred_contrib`); gateway calls it inline, falling back to a fixed rule on failure (ADR-0009) |
 | Observability (Prometheus/Grafana) | Implemented — `fraudguard_common.metrics` (framework-agnostic definitions), `GET /metrics` on all four services, Prometheus + Grafana in `docker-compose.yml`, dashboard and datasource provisioned as code under `ops/` (ADR-0010) |
-| Transaction simulator | Not started |
+| Transaction simulator | Implemented — `services/simulator` (`TransactionFactory` + `driver`, ADR-0011); black-box tests against the real, containerized gateway and feature-service (not in-process apps) verify the hot and cold paths end to end; CI's `integration` job now starts the full application tier, not just infrastructure |
 | Dashboard | Not started |
 
 ## Milestones

@@ -144,16 +144,26 @@ jobs:
         run: uv run --package fraudguard-ml python ml/pipelines/train.py
       # --wait blocks until every service's healthcheck passes (or fails the
       # step if one never does), instead of returning as soon as the
-      # containers start. --build guarantees feature-service and
-      # model-service reflect this checkout's code, not a stale cached
-      # image.
+      # containers start. --build guarantees every service reflects this
+      # checkout's code, not a stale cached image. gateway and aggregator
+      # join the list here (Milestone 11, ADR-0011): the simulator's
+      # black-box tests need the actual containerized gateway reachable at
+      # localhost:8000, and the hot-and-cold-path test needs a real
+      # aggregator consuming into a real feature-service -- earlier
+      # milestones' integration tests never needed either running as a
+      # container, since they built those services' apps in-process instead.
       - name: Start the stack
         run: >
           docker compose up -d --wait --build
           postgres redis kafka schema-registry feature-service model-service
+          gateway aggregator
       # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false (docker-compose.yml) and
       # this is a fresh cluster with no persisted topics, unlike a
-      # developer's long-running local stack.
+      # developer's long-running local stack. gateway's own healthcheck
+      # does not depend on Kafka (its publish is best-effort, ADR-0006), so
+      # --wait above does not guarantee the topic exists yet -- this step
+      # must still finish before the next one, so every test always sees a
+      # topic that already exists rather than racing its creation.
       - name: Create Kafka topics
         run: uv run --all-packages python ops/scripts/create_kafka_topics.py
       - name: Pytest (integration only)

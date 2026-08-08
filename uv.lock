@@ -14,6 +14,7 @@ members = [
     "fraudguard-gateway",
     "fraudguard-ml",
     "fraudguard-model-service",
+    "fraudguard-simulator",
 ]
 
 [[package]]
@@ -546,6 +547,17 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.38,<1" },
 ]
+
+[[package]]
+name = "fraudguard-simulator"
+version = "0.1.0"
+source = { editable = "services/simulator" }
+dependencies = [
+    { name = "httpx2" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx2", specifier = ">=2.9,<3" }]
 
 [[package]]
 name = "greenlet"

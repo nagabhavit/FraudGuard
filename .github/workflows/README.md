@@ -2,7 +2,7 @@
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `ci.yml` | push to main, pull request | Lockfile, lint, type check, tests, integration tests (Postgres, Redis, Kafka, Schema Registry, feature-service, model-service), pre-commit hooks |
+| `ci.yml` | push to main, pull request | Lockfile, lint, type check, tests, integration tests (full stack: Postgres, Redis, Kafka, Schema Registry, gateway, feature-service, aggregator, model-service), pre-commit hooks |
 | `security.yml` | push, pull request, weekly | Dependency audit and secret scanning |
 
 ## Branch protection

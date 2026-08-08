@@ -17,8 +17,11 @@ in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 > it synchronously; a feature-service or model-service outage degrades to a
 > fixed rule instead of blocking or failing open (ADR-0009). Every service
 > exposes Prometheus metrics; a Grafana dashboard (request latency, decision
-> outcomes, fallback rate) is provisioned as code (ADR-0010). Remaining work
-> is tracked in [`docs/architecture.md`](docs/architecture.md).
+> outcomes, fallback rate) is provisioned as code (ADR-0010). A transaction
+> simulator (`services/simulator`) drives realistic traffic against the real
+> containers and black-box tests verify the hot and cold paths end to end,
+> not just each service in isolation (ADR-0011). Remaining work is tracked in
+> [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -144,6 +147,16 @@ curl -fsS "http://localhost:8001/v1/features/$ACCOUNT_ID"
 # {"account_id": "...", "velocity_1m": 1, "velocity_1h": 1, "velocity_24h": 1, "distinct_merchants_24h": 1}
 ```
 
+Or send a batch of realistic traffic instead of one curl at a time
+(`services/simulator`, ADR-0011) -- a seeded pool of accounts, 90% "normal"
+and 10% "bursty", against the running gateway:
+
+```bash
+uv run --package fraudguard-simulator python -m simulator --count 30
+# sent 30: 30 succeeded, 0 failed
+#   approve: 30
+```
+
 Run a service locally without Docker (auto-reloads on change):
 
 ```bash
@@ -227,6 +240,12 @@ ops/          prometheus, grafana, load tests, chaos experiments, scripts
 docs/         architecture decision records and runbooks
 ```
 
+**`services/simulator` is the one exception in `services/*`:** no
+`Dockerfile`, no `docker-compose.yml` entry. It is a client that drives
+traffic against the compose stack from the host, not a member of it
+(ADR-0011) -- everything else in `services/*` is deployable and
+containerized.
+
 **Why `src/` inside each package.** With a flat layout, `import gateway`
 silently resolves to the working directory, so tests exercise the source tree
 rather than the installed package and a packaging mistake only surfaces in
@@ -258,6 +277,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0008](docs/adr/0008-stream-aggregator.md) | Manual offset commits (at-least-once, idempotent writes), cached schema resolution, and dual-check readiness for the new `aggregator` |
 | [0009](docs/adr/0009-model-service-and-hot-path-scoring.md) | LightGBM native Booster served by a new `model-service`; gateway calls it inline and falls back to a fixed rule on failure |
 | [0010](docs/adr/0010-observability.md) | Prometheus metrics (framework-agnostic definitions in `fraudguard-common`, cardinality-safe route-template labels) and a Grafana dashboard, provisioned as code |
+| [0011](docs/adr/0011-transaction-simulator-and-e2e-tests.md) | A new `services/simulator` (no Dockerfile, not a deployed service) generates realistic transaction traffic and drives the first tests that hit the real, containerized gateway and feature-service directly |
 
 ---
 

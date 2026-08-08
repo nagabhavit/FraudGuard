@@ -124,6 +124,7 @@ known-first-party = [
     "feature_service",
     "aggregator",
     "model_service",
+    "simulator",
 ]
 
 [tool.ruff.format]
@@ -193,6 +194,7 @@ source_pkgs = [
     "feature_service",
     "aggregator",
     "model_service",
+    "simulator",
 ]
 omit = ["*/tests/*"]
 
