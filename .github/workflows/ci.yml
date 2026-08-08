@@ -134,8 +134,11 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      # --group migrate installs Alembic and its sync driver (ADR-0005,
+      # a dev-only group never shipped in a service image) so the schema
+      # step below can run.
       - name: Install workspace
-        run: uv sync --all-packages --group test
+        run: uv sync --all-packages --group test --group migrate
       # model-service (ADR-0009) fails fast at startup with no trained model
       # on disk, and ml/models/ is gitignored -- it must be trained on this
       # runner before the container starts, the same as a developer running
@@ -153,6 +156,16 @@ jobs:
         run: >
           docker compose up -d --wait --build
           postgres redis kafka schema-registry
+      # Every application service's readiness probe only checks that
+      # Postgres is reachable (SELECT 1), not that the schema exists, so
+      # nothing before this catches a missing table -- it only surfaces once
+      # a test actually writes one. A developer's persistent local Postgres
+      # volume already has this from a prior `alembic upgrade head`
+      # (README's "Database migrations" section); a fresh CI runner's
+      # Postgres never does, so this must run explicitly, the same command
+      # README documents.
+      - name: Apply database migrations
+        run: uv run --all-packages --group migrate alembic -c db/alembic.ini upgrade head
       # KAFKA_AUTO_CREATE_TOPICS_ENABLE is false (docker-compose.yml) and
       # this is a fresh cluster with no persisted topics, unlike a
       # developer's long-running local stack. This must run *before* the
