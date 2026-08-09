@@ -1,0 +1,22 @@
+# Shared, non-secret configuration for FraudGuard's application services.
+# See ADR-0016: no datastore (Postgres/Redis/Kafka/Schema Registry)
+# connection settings appear here -- Milestone 16 is Kubernetes/Terraform
+# scaffolding for the application services only; provisioning datastores
+# in or alongside this cluster is explicitly out of scope (a later,
+# unscoped milestone). Values below are the same ones .env.example
+# already documents for local Docker Compose, translated to in-cluster
+# Service DNS names for the ones services call each other with.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fraudguard-config
+  namespace: fraudguard
+data:
+  LOG_LEVEL: "INFO"
+  FEATURE_SERVICE_URL: "http://feature-service.fraudguard.svc.cluster.local:8001"
+  MODEL_SERVICE_URL: "http://model-service.fraudguard.svc.cluster.local:8003"
+  # Placeholder: the real value depends on an Ingress/domain decision not
+  # made in this milestone (no Ingress resource is part of the approved
+  # Milestone 16 scope). Kept here, not omitted, so the gateway's CORS
+  # wiring (ADR-0012) has a documented home once that decision is made.
+  DASHBOARD_ORIGIN: "http://dashboard.fraudguard.svc.cluster.local:8080"

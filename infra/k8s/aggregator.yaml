@@ -1,0 +1,71 @@
+# aggregator Deployment + Service. See ADR-0016.
+#
+# Structural skeleton only -- REDIS_HOST/REDIS_PORT,
+# KAFKA_BOOTSTRAP_SERVERS, and SCHEMA_REGISTRY_URL (all present in
+# docker-compose.yml's aggregator environment block) are deliberately
+# absent: no datastore is provisioned in this milestone's scope.
+# Applying this manifest for real (not done in Milestone 16) would
+# crash-loop on first connection attempt, the same fail-fast behavior
+# every other manifest in this directory shares.
+#
+# livenessProbe/readinessProbe target /health/live and /health/ready
+# exactly as services/aggregator/Dockerfile's own HEALTHCHECK already
+# does -- /health/ready reports both Redis reachability and whether the
+# background consume loop is running (ADR-0008), unchanged here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aggregator
+  namespace: fraudguard
+  labels:
+    app.kubernetes.io/name: aggregator
+    app.kubernetes.io/part-of: fraudguard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aggregator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aggregator
+    spec:
+      containers:
+        - name: aggregator
+          # Same local image docker-compose.yml already builds
+          # (services/aggregator/Dockerfile). Publishing this to a real
+          # registry (e.g. ECR) is deployment-pipeline work, Milestone 31.
+          image: fraudguard-aggregator:latest
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - configMapRef:
+                name: fraudguard-config
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aggregator
+  namespace: fraudguard
+  labels:
+    app.kubernetes.io/name: aggregator
+spec:
+  selector:
+    app.kubernetes.io/name: aggregator
+  ports:
+    - port: 8002
+      targetPort: 8002

@@ -1,0 +1,70 @@
+# Gateway Deployment + Service. See ADR-0016.
+#
+# Structural skeleton only -- POSTGRES_*, KAFKA_BOOTSTRAP_SERVERS, and
+# SCHEMA_REGISTRY_URL (all present in docker-compose.yml's gateway
+# environment block) are deliberately absent: no datastore is
+# provisioned in this milestone's scope. Applying this manifest for real
+# (not done in Milestone 16) would crash-loop on first Postgres
+# connection attempt -- the same fail-fast behavior docker-compose.yml's
+# own services already have when a real dependency is missing, not a new
+# failure mode invented here.
+#
+# livenessProbe/readinessProbe target /health/live and /health/ready
+# exactly as services/gateway/Dockerfile's own HEALTHCHECK already does.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: fraudguard
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/part-of: fraudguard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gateway
+    spec:
+      containers:
+        - name: gateway
+          # Same local image docker-compose.yml already builds
+          # (services/gateway/Dockerfile). Publishing this to a real
+          # registry (e.g. ECR) is deployment-pipeline work, Milestone 31.
+          image: fraudguard-gateway:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: fraudguard-config
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: fraudguard
+  labels:
+    app.kubernetes.io/name: gateway
+spec:
+  selector:
+    app.kubernetes.io/name: gateway
+  ports:
+    - port: 8000
+      targetPort: 8000

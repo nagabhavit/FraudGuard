@@ -1,0 +1,70 @@
+# feature-service Deployment + Service. See ADR-0016.
+#
+# Structural skeleton only -- REDIS_HOST/REDIS_PORT (present in
+# docker-compose.yml's feature-service environment block) are
+# deliberately absent: no datastore is provisioned in this milestone's
+# scope. Applying this manifest for real (not done in Milestone 16)
+# would crash-loop on first Redis connection attempt, the same
+# fail-fast behavior every other manifest in this directory shares.
+#
+# livenessProbe/readinessProbe target /health/live and /health/ready
+# exactly as services/feature-service/Dockerfile's own HEALTHCHECK
+# already does.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feature-service
+  namespace: fraudguard
+  labels:
+    app.kubernetes.io/name: feature-service
+    app.kubernetes.io/part-of: fraudguard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: feature-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: feature-service
+    spec:
+      containers:
+        - name: feature-service
+          # Same local image docker-compose.yml already builds
+          # (services/feature-service/Dockerfile). Publishing this to a
+          # real registry (e.g. ECR) is deployment-pipeline work,
+          # Milestone 31.
+          image: fraudguard-feature-service:latest
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: fraudguard-config
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: feature-service
+  namespace: fraudguard
+  labels:
+    app.kubernetes.io/name: feature-service
+spec:
+  selector:
+    app.kubernetes.io/name: feature-service
+  ports:
+    - port: 8001
+      targetPort: 8001

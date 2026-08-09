@@ -254,6 +254,50 @@ visible via `GET /v1/transactions`, a `transaction_id` that does not exist
 returns 404, and `fraudguard_gateway_labels_total{source, is_fraud}` counts
 the write.
 
+## Kubernetes and Terraform scaffolding
+
+`infra/terraform/` and `infra/k8s/` (ADR-0016) are a plan/validate-only
+skeleton for the eventual production deployment target -- Amazon EKS,
+chosen explicitly in this milestone though never provisioned by it. No
+AWS credentials are used anywhere; no `terraform apply`; no real cloud
+resource of any kind is created.
+
+Terraform is the smallest structurally-valid EKS cluster definition,
+hand-written against the native `hashicorp/aws` provider: a VPC with two
+public subnets across two Availability Zones, an IAM role and policy
+attachment for the control plane, and the `aws_eks_cluster` resource
+wired to both. No node groups, no cluster add-ons, no OIDC/IRSA -- real,
+later decisions this milestone does not need to make. The S3+DynamoDB
+remote-state backend `.gitignore` already reserved is declared but never
+initialized against; `terraform init -backend=false` skips backend
+initialization entirely, which is what this milestone's validation
+actually runs.
+
+Kubernetes manifests cover the five containerized application services
+only (`gateway`, `feature-service`, `aggregator`, `model-service`,
+`dashboard`) -- no datastores. Each Deployment's `livenessProbe`/
+`readinessProbe` targets the exact same `/health/live`/`/health/ready`
+paths (`/` for the dashboard, a static nginx-served SPA with no health
+route of its own) its own Dockerfile's `HEALTHCHECK` already checks. The
+four Python services' manifests deliberately omit `POSTGRES_*`,
+`KAFKA_BOOTSTRAP_SERVERS`, and `SCHEMA_REGISTRY_URL` -- present in
+`docker-compose.yml`'s environment blocks, absent here, since no
+datastore is provisioned in or alongside this cluster. Applying any of
+these manifests for real (not done here) would crash-loop on first
+connection attempt, the same fail-fast behavior `docker-compose.yml`'s
+own services already have when a real dependency is missing.
+
+Verified locally, with no AWS account or credentials: `terraform init
+-backend=false && terraform validate` exits 0 against
+`infra/terraform/`. `kubectl apply --dry-run=client -f infra/k8s/` exits
+0 for every manifest (validated against a real local `docker-desktop`
+`kind` cluster enabled solely for this check -- `--dry-run=client` never
+creates anything regardless, confirmed directly: `kubectl get all -n
+fraudguard` reports no such namespace after running it). Every
+Deployment's probe path and port were cross-checked against its
+service's actual Dockerfile `HEALTHCHECK` line, not just against this
+document's description of it.
+
 ## Current implementation status
 
 | Component | State |
@@ -271,6 +315,7 @@ the write.
 | Transaction simulator | Implemented — `services/simulator` (`TransactionFactory` + `driver`, ADR-0011); black-box tests against the real, containerized gateway and feature-service (not in-process apps) verify the hot and cold paths end to end; CI's `integration` job now starts the full application tier, not just infrastructure |
 | Dashboard | Implemented — `dashboard/` (React + TypeScript, npm project outside the uv workspace, ADR-0003); gateway's new `GET /v1/transactions` (ADR-0012) serves a live-polling feed of transactions and decisions, unauthenticated by design |
 | Labels | Implemented — `gateway/labels.py`'s `POST /v1/transactions/{id}/labels` (ADR-0014) writes to the previously-unused `labels` table (ADR-0005); `GET /v1/transactions` embeds each transaction's labels; `ml/pipelines/train.py` still trains on synthetic data only, unchanged |
+| Kubernetes / Terraform scaffolding | Implemented — `infra/terraform/` (a hand-written, plan/validate-only EKS cluster skeleton) and `infra/k8s/` (Deployment/Service manifests for the five application services, ADR-0016); no AWS credentials used, no `terraform apply`, no real cluster ever provisioned |
 
 ## Milestones
 
@@ -291,7 +336,9 @@ scope is not yet fully specified.
 | 12 | Dashboard | React ops console; a new gateway read endpoint, `GET /v1/transactions` (ADR-0012) |
 | 13 | Alerting | Prometheus Alertmanager, alert rules for the degradation ladder and pipeline health, a hot-path latency budget distinct from the timeout (ADR-0013) |
 | 14 | Labels | Gateway write endpoint for ground-truth labels arriving after the fact; embedded in the dashboard's transaction feed (ADR-0014) |
-| 15+ | Load/chaos testing, k8s/Terraform | Portfolio-polish and production-hardening milestones |
+| 15 | Load and chaos testing | A concurrent load driver (`simulator/load.py`) and scripted, self-verifying chaos experiments (`ops/chaos/`) for the degradation ladder and aggregator recovery (ADR-0015) |
+| 16 | Kubernetes / Terraform scaffolding | A plan/validate-only EKS cluster skeleton and Kubernetes manifests for the application services -- no AWS credentials, no `apply`, no real cluster (ADR-0016) |
+| 17+ | Unscoped | Milestones 17-28 and 30 have no defined scope anywhere in this repository. Milestone 29 (production secrets/config via AWS Secrets Manager, production Kafka topology) and Milestone 31 (CI/CD deployment pipeline, Action SHA-pinning) are referenced by name elsewhere in the codebase (`.env.example`, `docker-compose.yml`, `fraudguard_common.settings`, `.github/workflows/README.md`) but not yet designed here. |
 
 ## Degradation ladder
 

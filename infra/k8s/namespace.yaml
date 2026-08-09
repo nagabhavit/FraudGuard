@@ -1,0 +1,8 @@
+# See ADR-0016. Plan/validate only -- checked with
+# `kubectl apply --dry-run=client`, never applied to a real cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fraudguard
+  labels:
+    app.kubernetes.io/part-of: fraudguard

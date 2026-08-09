@@ -222,6 +222,29 @@ docker compose down -v    # stop, delete volumes
 
 ---
 
+## Kubernetes and Terraform (plan/validate only)
+
+`infra/terraform/` and `infra/k8s/` (ADR-0016) are a plan/validate-only
+skeleton for the eventual production deployment target -- Amazon EKS. No
+AWS credentials are used or required; `terraform apply` is never run; no
+real cloud resource or long-lived cluster is created by validating this.
+
+```bash
+# Terraform: no AWS credentials needed -- this only checks internal
+# syntax/type consistency, never talks to AWS.
+terraform -chdir=infra/terraform init -backend=false
+terraform -chdir=infra/terraform validate
+
+# Kubernetes manifests: needs a reachable cluster for kubectl to resolve
+# resource types, even in client-only dry-run mode -- Docker Desktop's
+# built-in Kubernetes (Settings -> Kubernetes -> Enable) works, or any
+# other local cluster you already have. --dry-run=client never creates
+# anything on the cluster regardless.
+kubectl apply --dry-run=client -f infra/k8s/
+```
+
+---
+
 ## Commands
 
 ```bash
@@ -339,6 +362,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0012](docs/adr/0012-dashboard-read-api.md) | The gateway gains a read-only, unauthenticated `GET /v1/transactions` for the new `dashboard/` React ops console, instead of a new query service |
 | [0013](docs/adr/0013-alerting.md) | Prometheus Alertmanager (a null/log receiver, local dev only) with five alert rules; new metrics close the hot-path-budget-vs-timeout gap and the Kafka-publish-failure gap |
 | [0014](docs/adr/0014-labels-write-api.md) | The gateway gains a write endpoint, `POST /v1/transactions/{id}/labels`, for ground-truth labels, instead of a new `services/labels`; `GET /v1/transactions` embeds them |
+| [0016](docs/adr/0016-kubernetes-and-terraform-scaffolding.md) | A plan/validate-only EKS cluster skeleton (`infra/terraform/`) and Kubernetes manifests for the application services (`infra/k8s/`) -- no AWS credentials, no `apply`, no real cluster |
 
 ---
 
