@@ -10,6 +10,12 @@
 # livenessProbe/readinessProbe target /health/live and /health/ready
 # exactly as services/feature-service/Dockerfile's own HEALTHCHECK
 # already does.
+#
+# resources below are ILLUSTRATIVE STARTING VALUES, not load-test-derived
+# capacity planning (Milestone 22) -- per this project's "no invented
+# numbers presented as fact" discipline (ADR-0015). Real validation and
+# tuning against actual load is Milestone 30's job, once this runs
+# against a real cluster; nothing here is ever applied regardless.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -40,6 +46,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: fraudguard-config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
           livenessProbe:
             httpGet:
               path: /health/live

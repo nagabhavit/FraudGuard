@@ -1,0 +1,114 @@
+# HorizontalPodAutoscalers for the five application services -- plan/
+# validate only. Milestone 22.
+#
+# Depends on infra/k8s/metrics-server.yaml -- HPA reads CPU utilization
+# from the metrics.k8s.io API, which only exists once Metrics Server is
+# running. Without it these manifests are syntactically valid but
+# functionally inert; not claimed as production-ready autoscaling on
+# their own (see metrics-server.yaml's own header).
+#
+# minReplicas: 1, maxReplicas: 3, targetCPUUtilizationPercentage: 70 are
+# ILLUSTRATIVE STARTING VALUES, not load-test-derived capacity planning
+# -- per this project's "no invented numbers presented as fact"
+# discipline (ADR-0015). minReplicas matches each Deployment's existing
+# replicas: 1 baseline (unchanged, not a capacity decision made here).
+# Real validation and tuning against actual load is Milestone 30's job.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+  namespace: fraudguard
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: feature-service
+  namespace: fraudguard
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: feature-service
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: aggregator
+  namespace: fraudguard
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: aggregator
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: model-service
+  namespace: fraudguard
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: model-service
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: dashboard
+  namespace: fraudguard
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: dashboard
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

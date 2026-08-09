@@ -1,0 +1,64 @@
+# PodDisruptionBudgets for the five application services -- plan/
+# validate only. Milestone 22.
+#
+# maxUnavailable: 1 (not minAvailable) -- with each Deployment's
+# baseline replicas: 1 unchanged (a capacity decision this milestone
+# does not make), a PDB is only meaningful once HPA (infra/k8s/hpa.yaml)
+# scales a Deployment beyond one replica; maxUnavailable: 1 remains
+# correct and non-blocking at any replica count, whereas
+# minAvailable: 1 would forbid ever evicting the sole pod while
+# replicas: 1 is in effect.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+  namespace: fraudguard
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: feature-service
+  namespace: fraudguard
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: feature-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aggregator
+  namespace: fraudguard
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aggregator
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: model-service
+  namespace: fraudguard
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: model-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dashboard
+  namespace: fraudguard
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dashboard

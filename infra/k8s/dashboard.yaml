@@ -9,6 +9,13 @@
 # build time (VITE_GATEWAY_URL, docker-compose.yml), not read from the
 # environment at runtime -- this manifest sets no env vars for that
 # reason, the same way the image itself takes none at runtime.
+#
+# resources below are ILLUSTRATIVE STARTING VALUES, not load-test-derived
+# capacity planning (Milestone 22) -- per this project's "no invented
+# numbers presented as fact" discipline (ADR-0015). Lower than the four
+# Python services: a static nginx-served SPA has materially smaller
+# baseline footprint. Real validation and tuning against actual load is
+# Milestone 30's job; nothing here is ever applied regardless.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,6 +42,13 @@ spec:
           image: fraudguard-dashboard:latest
           ports:
             - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           livenessProbe:
             httpGet:
               path: /
