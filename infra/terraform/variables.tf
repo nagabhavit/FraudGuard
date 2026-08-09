@@ -18,3 +18,32 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+# The following four describe the EKS managed node group (ADR-0017).
+# Illustrative defaults, not capacity planning -- nothing here is ever
+# applied against a real account, so there is no real workload to size
+# against yet.
+
+variable "node_instance_type" {
+  description = "EC2 instance type for the EKS managed node group. Never actually launched in Milestone 17 -- plan/validate only (ADR-0017)."
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "node_desired_size" {
+  description = "Desired worker node count. Not a capacity decision -- see ADR-0017."
+  type        = number
+  default     = 1
+}
+
+variable "node_min_size" {
+  description = "Minimum worker node count. Not a capacity decision -- see ADR-0017."
+  type        = number
+  default     = 1
+}
+
+variable "node_max_size" {
+  description = "Maximum worker node count. Not a capacity decision -- see ADR-0017."
+  type        = number
+  default     = 1
+}

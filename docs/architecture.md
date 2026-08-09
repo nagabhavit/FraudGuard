@@ -298,6 +298,36 @@ Deployment's probe path and port were cross-checked against its
 service's actual Dockerfile `HEALTHCHECK` line, not just against this
 document's description of it.
 
+## EKS node group scaffolding
+
+`infra/terraform/node_group.tf` (ADR-0017) is the next plan/validate-only
+slice: the minimum AWS-mandated infrastructure for an EKS managed node
+group, since a cluster with no worker nodes -- Milestone 16's own scope
+-- can never run a pod. `main.tf` is unmodified; every new resource only
+references its existing `aws_eks_cluster.this` and `aws_subnet.public[*].id`,
+reusing Milestone 16's cluster and subnets rather than duplicating them.
+
+Five resources, each an AWS-documented requirement, not a design
+preference: a separate IAM role for worker nodes (`ec2.amazonaws.com`,
+distinct from the cluster's own `eks.amazonaws.com` role), the three
+policies AWS requires attached to it (`AmazonEKSWorkerNodePolicy`,
+`AmazonEKS_CNI_Policy`, `AmazonEC2ContainerRegistryReadOnly`), and the
+`aws_eks_node_group` resource itself. Sizing (`desired_size = min_size =
+max_size = 1`, one `t3.medium` instance type) is illustrative, not
+capacity planning -- nothing here is ever applied. No cluster add-ons
+(VPC CNI, CoreDNS, kube-proxy), no OIDC/IRSA, no private subnets or NAT
+gateway -- all remain exactly as deferred as ADR-0016 already left them;
+worker nodes reuse the existing public subnets, a documented
+simplification, not the production-realistic pattern.
+
+Verified locally, with no AWS account or credentials: `terraform init
+-backend=false && terraform validate` exits 0 against
+`infra/terraform/` (now including `node_group.tf`). `aws_vpc`,
+`aws_subnet`, and `aws_eks_cluster` each still appear exactly once across
+`infra/terraform/*.tf`, confirmed by direct grep -- `node_group.tf`
+reuses Milestone 16's resources, it does not duplicate them. `main.tf` is
+byte-for-byte unchanged.
+
 ## Current implementation status
 
 | Component | State |
@@ -316,6 +346,7 @@ document's description of it.
 | Dashboard | Implemented — `dashboard/` (React + TypeScript, npm project outside the uv workspace, ADR-0003); gateway's new `GET /v1/transactions` (ADR-0012) serves a live-polling feed of transactions and decisions, unauthenticated by design |
 | Labels | Implemented — `gateway/labels.py`'s `POST /v1/transactions/{id}/labels` (ADR-0014) writes to the previously-unused `labels` table (ADR-0005); `GET /v1/transactions` embeds each transaction's labels; `ml/pipelines/train.py` still trains on synthetic data only, unchanged |
 | Kubernetes / Terraform scaffolding | Implemented — `infra/terraform/` (a hand-written, plan/validate-only EKS cluster skeleton) and `infra/k8s/` (Deployment/Service manifests for the five application services, ADR-0016); no AWS credentials used, no `terraform apply`, no real cluster ever provisioned |
+| EKS node group scaffolding | Implemented — `infra/terraform/node_group.tf` (a plan/validate-only managed node group: worker IAM role + 3 required policy attachments + the node group itself, reusing Milestone 16's cluster and public subnets, ADR-0017); `main.tf` unmodified; no AWS credentials used, no `terraform apply`, no real node ever launched |
 
 ## Milestones
 
@@ -338,7 +369,8 @@ scope is not yet fully specified.
 | 14 | Labels | Gateway write endpoint for ground-truth labels arriving after the fact; embedded in the dashboard's transaction feed (ADR-0014) |
 | 15 | Load and chaos testing | A concurrent load driver (`simulator/load.py`) and scripted, self-verifying chaos experiments (`ops/chaos/`) for the degradation ladder and aggregator recovery (ADR-0015) |
 | 16 | Kubernetes / Terraform scaffolding | A plan/validate-only EKS cluster skeleton and Kubernetes manifests for the application services -- no AWS credentials, no `apply`, no real cluster (ADR-0016) |
-| 17+ | Unscoped | Milestones 17-28 and 30 have no defined scope anywhere in this repository. Milestone 29 (production secrets/config via AWS Secrets Manager, production Kafka topology) and Milestone 31 (CI/CD deployment pipeline, Action SHA-pinning) are referenced by name elsewhere in the codebase (`.env.example`, `docker-compose.yml`, `fraudguard_common.settings`, `.github/workflows/README.md`) but not yet designed here. |
+| 17 | EKS node group scaffolding | A plan/validate-only EKS managed node group (worker IAM role, required policy attachments, the node group itself), reusing Milestone 16's cluster and subnets -- no AWS credentials, no `apply`, no real node (ADR-0017). Scoped by explicit approval, not a repository hint: an exhaustive git-history search found no evidence Milestone 17 was ever defined anywhere. |
+| 18+ | Unscoped | Milestones 18-28 and 30 have no defined scope anywhere in this repository. Milestone 29 (production secrets/config via AWS Secrets Manager, production Kafka topology) and Milestone 31 (CI/CD deployment pipeline, Action SHA-pinning) are referenced by name elsewhere in the codebase (`.env.example`, `docker-compose.yml`, `fraudguard_common.settings`, `.github/workflows/README.md`) but not yet designed here. |
 
 ## Degradation ladder
 

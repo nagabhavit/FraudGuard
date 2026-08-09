@@ -363,6 +363,7 @@ context, the decision, the alternatives considered, and the consequences.
 | [0013](docs/adr/0013-alerting.md) | Prometheus Alertmanager (a null/log receiver, local dev only) with five alert rules; new metrics close the hot-path-budget-vs-timeout gap and the Kafka-publish-failure gap |
 | [0014](docs/adr/0014-labels-write-api.md) | The gateway gains a write endpoint, `POST /v1/transactions/{id}/labels`, for ground-truth labels, instead of a new `services/labels`; `GET /v1/transactions` embeds them |
 | [0016](docs/adr/0016-kubernetes-and-terraform-scaffolding.md) | A plan/validate-only EKS cluster skeleton (`infra/terraform/`) and Kubernetes manifests for the application services (`infra/k8s/`) -- no AWS credentials, no `apply`, no real cluster |
+| [0017](docs/adr/0017-eks-node-group-scaffolding.md) | A plan/validate-only EKS managed node group (`infra/terraform/node_group.tf`), reusing Milestone 16's cluster and public subnets -- no AWS credentials, no `apply`, no real node |
 
 ---
 
