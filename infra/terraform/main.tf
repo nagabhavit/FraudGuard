@@ -106,6 +106,13 @@ resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
 resource "aws_eks_cluster" "this" {
   name     = var.cluster_name
   role_arn = aws_iam_role.eks_cluster.arn
+  # Pinned explicitly (Milestone 19) so cluster add-on versions
+  # (infra/terraform/addons.tf) have a fixed Kubernetes minor version to
+  # be verified compatible against, rather than floating with whatever
+  # EKS treats as "current default" at apply time. Re-verify against
+  # AWS's supported-version list before ever applying this for real --
+  # standard support is time-bound per Kubernetes minor version.
+  version = "1.35"
 
   vpc_config {
     subnet_ids = aws_subnet.public[*].id
