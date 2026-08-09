@@ -1,0 +1,40 @@
+# Gateway Ingress (AWS Load Balancer Controller) -- plan/validate only.
+# Milestone 21.
+#
+# Gateway only -- the dashboard is deliberately not exposed through this
+# Ingress (out of scope for this milestone). scheme=internet-facing and
+# target-type=ip: pods already get real routable VPC IPs (the VPC CNI
+# add-on, Milestone 19), so the controller registers pod IPs directly
+# rather than going through NodePort/instance registration. Discovery of
+# the public subnets to place the ALB in relies on main.tf's existing
+# kubernetes.io/role/elb=1 tag (Milestone 16) -- no Terraform change
+# needed for that.
+#
+# No TLS annotation (e.g. alb.ingress.kubernetes.io/certificate-arn) --
+# blocked on a real registered domain, which does not exist anywhere in
+# this repository and is not invented here. This Ingress is HTTP-only
+# until a real domain is supplied; TLS remains mandatory for any real
+# public deployment (Milestone 31), not optional going forward.
+#
+# The existing gateway ClusterIP Service (infra/k8s/gateway.yaml) is
+# unchanged -- nothing in this manifest required it to be.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway
+  namespace: fraudguard
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8000
