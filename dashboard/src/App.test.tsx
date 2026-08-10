@@ -1,14 +1,16 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { fetchTransactions } from "./api";
-import type { TransactionFeedItem } from "./types";
+import { createLabel, fetchTransactions } from "./api";
+import type { LabelRead, TransactionFeedItem } from "./types";
 
 vi.mock("./api", () => ({
   fetchTransactions: vi.fn(),
+  createLabel: vi.fn(),
 }));
 
 const mockedFetchTransactions = vi.mocked(fetchTransactions);
+const mockedCreateLabel = vi.mocked(createLabel);
 
 function scoredItem(): TransactionFeedItem {
   return {
@@ -25,6 +27,7 @@ function scoredItem(): TransactionFeedItem {
       reason_codes: ["velocity_1h", "distinct_merchants_24h"],
       decided_at: "2026-08-08T12:00:00Z",
     },
+    labels: [],
   };
 }
 
@@ -43,6 +46,7 @@ function fallbackItem(): TransactionFeedItem {
       reason_codes: null,
       decided_at: "2026-08-08T11:00:00Z",
     },
+    labels: [],
   };
 }
 
@@ -103,5 +107,82 @@ describe("App", () => {
         screen.getByText(/Could not reach the gateway/),
       ).toBeInTheDocument(),
     );
+  });
+
+  // Milestone 28: label display/submission.
+
+  it("renders a transaction's existing labels", async () => {
+    const item = scoredItem();
+    item.labels = [
+      {
+        id: "label-1",
+        is_fraud: true,
+        source: "chargeback",
+        notes: null,
+        labeled_at: "2026-08-09T00:00:00Z",
+      },
+    ];
+    mockedFetchTransactions.mockResolvedValue({
+      items: [item],
+      limit: 50,
+      offset: 0,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("fraud (chargeback)")).toBeInTheDocument();
+  });
+
+  it("submits a new label and shows it without waiting for the next poll", async () => {
+    mockedFetchTransactions.mockResolvedValue({
+      items: [scoredItem()],
+      limit: 50,
+      offset: 0,
+    });
+    const created: LabelRead = {
+      id: "label-1",
+      transaction_id: "9b1f7b1e-1111-4b1e-8b1e-111111111111",
+      is_fraud: true,
+      source: "chargeback",
+      notes: "flagged by bank",
+      labeled_at: "2026-08-10T00:00:00Z",
+    };
+    mockedCreateLabel.mockResolvedValue(created);
+
+    render(<App />);
+    expect(await screen.findByText("merchant-1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "+ label" }));
+    const selects = screen.getAllByRole("combobox");
+    fireEvent.change(selects[1], { target: { value: "chargeback" } });
+    fireEvent.change(screen.getByPlaceholderText("Notes (optional)"), {
+      target: { value: "flagged by bank" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() =>
+      expect(mockedCreateLabel).toHaveBeenCalledWith(
+        "9b1f7b1e-1111-4b1e-8b1e-111111111111",
+        { is_fraud: true, source: "chargeback", notes: "flagged by bank" },
+      ),
+    );
+    expect(await screen.findByText("fraud (chargeback)")).toBeInTheDocument();
+  });
+
+  it("surfaces a label submission failure instead of failing silently", async () => {
+    mockedFetchTransactions.mockResolvedValue({
+      items: [scoredItem()],
+      limit: 50,
+      offset: 0,
+    });
+    mockedCreateLabel.mockRejectedValue(new Error("label submit failed"));
+
+    render(<App />);
+    expect(await screen.findByText("merchant-1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "+ label" }));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+
+    expect(await screen.findByText("label submit failed")).toBeInTheDocument();
   });
 });

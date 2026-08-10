@@ -1,4 +1,4 @@
-import type { TransactionFeedPage } from "./types";
+import type { LabelCreate, LabelRead, TransactionFeedPage } from "./types";
 
 // Always the gateway's host-mapped port, both in `npm run dev` and in the
 // built static image served by docker-compose -- the browser calls it
@@ -32,4 +32,27 @@ export async function fetchTransactions(
     );
   }
   return (await response.json()) as TransactionFeedPage;
+}
+
+export async function createLabel(
+  transactionId: string,
+  payload: LabelCreate,
+): Promise<LabelRead> {
+  const url = new URL(
+    `/v1/transactions/${transactionId}/labels`,
+    API_BASE_URL,
+  );
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      `POST /v1/transactions/${transactionId}/labels failed: ${response.status}`,
+      response.status,
+    );
+  }
+  return (await response.json()) as LabelRead;
 }

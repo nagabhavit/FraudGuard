@@ -125,3 +125,38 @@ td.empty {
 .badge-decline {
   background: var(--decline);
 }
+
+td.labels-cell {
+  white-space: normal;
+}
+
+td.labels-cell .badge {
+  margin: 2px 4px 2px 0;
+}
+
+.add-label-button {
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+.label-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.label-form input[type="text"] {
+  min-width: 120px;
+}
+
+.label-error {
+  flex-basis: 100%;
+  background: var(--error-bg);
+  border: 1px solid var(--decline);
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin: 4px 0 0;
+  font-size: 12px;
+}
