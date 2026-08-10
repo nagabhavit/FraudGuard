@@ -49,6 +49,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: fraudguard-config
+            # Milestone 29: POSTGRES_PASSWORD, ESO-managed
+            # (infra/k8s/external-secret-app.yaml). gateway is the only
+            # one of the four app services whose code currently reads
+            # this (fraudguard_db.session.DatabaseSettings, via
+            # LocalDatabaseSettings in services/gateway/src/gateway/app.py).
+            - secretRef:
+                name: fraudguard-secrets
           resources:
             requests:
               cpu: 100m

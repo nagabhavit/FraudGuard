@@ -9,9 +9,21 @@ than each hardcoding its own copy that can drift.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 _SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+
+# Milestone 29: environment-aware, not hardcoded -- local docker-compose
+# runs a single broker (replication factor can never exceed the real
+# broker count), while production's MSK cluster (Milestone 24, 4 brokers)
+# uses RF=3, this project's own documented target (docker-compose.yml,
+# .env.example). Defaults to 1 so every existing local/CI invocation is
+# unchanged unless KAFKA_REPLICATION_FACTOR is explicitly set -- read
+# once at import time, matching this module's existing "single source of
+# truth, plain constants" design rather than a per-call override living
+# elsewhere.
+_DEFAULT_REPLICATION_FACTOR = int(os.environ.get("KAFKA_REPLICATION_FACTOR", "1"))
 
 
 @dataclass(frozen=True)
@@ -28,8 +40,7 @@ TRANSACTIONS_V1 = TopicSpec(
     # the stream aggregator real parallelism to reason about locally without
     # pretending this dev cluster needs production-scale partitioning.
     partitions=3,
-    # Single broker locally; production uses 3 (docker-compose.yml, Milestone 29).
-    replication_factor=1,
+    replication_factor=_DEFAULT_REPLICATION_FACTOR,
     # Long enough to replay a bad aggregator deploy; short enough not to
     # matter for a laptop's disk.
     retention_ms=_SEVEN_DAYS_MS,

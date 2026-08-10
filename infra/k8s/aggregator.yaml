@@ -50,6 +50,14 @@ spec:
           envFrom:
             - configMapRef:
                 name: fraudguard-config
+            # Milestone 29: fraudguard-secrets, ESO-managed
+            # (infra/k8s/external-secret-app.yaml). Wired here per
+            # approved M29 scope; aggregator's own code (Redis + Kafka,
+            # neither currently authenticated) does not currently read
+            # anything from it -- same "harmless, forward-compatible"
+            # reasoning as feature-service.yaml.
+            - secretRef:
+                name: fraudguard-secrets
           resources:
             requests:
               cpu: 100m

@@ -52,6 +52,15 @@ spec:
           envFrom:
             - configMapRef:
                 name: fraudguard-config
+            # Milestone 29: fraudguard-secrets, ESO-managed
+            # (infra/k8s/external-secret-app.yaml). Wired here per
+            # approved M29 scope; model-service has no datastore
+            # dependency at all today (it scores in-memory only) and
+            # reads nothing from either this Secret or the ConfigMap's
+            # datastore keys -- same "harmless, forward-compatible"
+            # reasoning as feature-service.yaml.
+            - secretRef:
+                name: fraudguard-secrets
           resources:
             requests:
               cpu: 200m

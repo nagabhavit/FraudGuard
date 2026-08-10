@@ -213,6 +213,19 @@ spec:
           image: grafana/grafana:11.4.0
           ports:
             - containerPort: 3000
+          # Milestone 29: production auth -- a single real admin
+          # account, not anonymous access (docker-compose.yml's local-
+          # only GF_AUTH_ANONYMOUS_ENABLED=true posture, explicitly
+          # named there as "never the production posture, Milestone 29
+          # territory"). No SSO/OAuth, per approved M29 scope.
+          env:
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: GF_SECURITY_ADMIN_PASSWORD
           resources:
             requests:
               cpu: 100m

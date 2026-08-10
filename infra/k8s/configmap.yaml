@@ -1,11 +1,13 @@
 # Shared, non-secret configuration for FraudGuard's application services.
-# See ADR-0016: no datastore (Postgres/Redis/Kafka/Schema Registry)
-# connection settings appear here -- Milestone 16 is Kubernetes/Terraform
-# scaffolding for the application services only; provisioning datastores
-# in or alongside this cluster is explicitly out of scope (a later,
-# unscoped milestone). Values below are the same ones .env.example
-# already documents for local Docker Compose, translated to in-cluster
-# Service DNS names for the ones services call each other with.
+# See ADR-0016. Milestone 29 adds the datastore connection values ADR-0016
+# explicitly deferred ("provisioning datastores in or alongside this
+# cluster is explicitly out of scope") -- now that Milestones 23/24
+# actually provisioned RDS/ElastiCache/MSK, wiring services to them is
+# finally in scope. Only non-secret values live here: POSTGRES_PASSWORD
+# is deliberately absent (infra/k8s/external-secret-app.yaml,
+# fraudguard-secrets Secret) -- approved M29 decision: do not treat
+# non-secret connection info as credentials by putting it in a Secret it
+# doesn't need to be in.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,3 +22,38 @@ data:
   # Milestone 16 scope). Kept here, not omitted, so the gateway's CORS
   # wiring (ADR-0012) has a documented home once that decision is made.
   DASHBOARD_ORIGIN: "http://dashboard.fraudguard.svc.cluster.local:8080"
+  # Placeholder: the real RDS endpoint is only known once
+  # infra/terraform/rds.tf is actually applied (a computed attribute,
+  # aws_db_instance.this.address). POSTGRES_PORT/DB/USER are real,
+  # static values already fixed in rds.tf (5432, "fraudguard",
+  # "fraudguard") -- not placeholders, since Terraform itself already
+  # commits to them regardless of apply state.
+  POSTGRES_HOST: "<RDS_ENDPOINT>"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "fraudguard"
+  POSTGRES_USER: "fraudguard"
+  # Placeholder: the real ElastiCache endpoint is only known once
+  # infra/terraform/elasticache.tf is actually applied (a computed
+  # attribute, aws_elasticache_replication_group.this.primary_endpoint_
+  # address). No Redis password: Milestone 23's replication group sets
+  # no auth_token, matching this project's local dev Redis (no
+  # authentication either) -- REDIS_HOST is connection info, not a
+  # credential, per the same M29 decision DASHBOARD_ORIGIN and the
+  # Postgres values above already follow.
+  REDIS_HOST: "<ELASTICACHE_ENDPOINT>"
+  REDIS_PORT: "6379"
+  # Placeholder: the real MSK bootstrap-broker string is only known once
+  # infra/terraform/msk.tf is actually applied (a computed attribute,
+  # aws_msk_cluster.this.bootstrap_brokers_tls -- TLS-only, matching
+  # Milestone 24's encryption_in_transit.client_broker = "TLS"). MSK
+  # client authentication (SASL/IAM) is explicitly out of scope for this
+  # milestone, per approved M29 decision -- TLS-in-transit only, exactly
+  # as Milestone 24 already configured; nothing here changes that.
+  KAFKA_BOOTSTRAP_SERVERS: "<MSK_BOOTSTRAP_BROKERS>"
+  # Honest gap, not invented: no Schema Registry (self-hosted or AWS
+  # Glue Schema Registry) is provisioned anywhere in this project's
+  # Terraform/Kubernetes work through Milestone 29. docker-compose.yml's
+  # local Confluent Schema Registry has no production equivalent yet --
+  # this placeholder documents that gap rather than inventing
+  # infrastructure this milestone was never scoped to create.
+  SCHEMA_REGISTRY_URL: "<SCHEMA_REGISTRY_URL_UNDECIDED>"

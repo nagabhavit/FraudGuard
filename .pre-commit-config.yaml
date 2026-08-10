@@ -50,7 +50,37 @@ repos:
         # Model artifacts belong in S3 with a registry row pointing at them.
         # This is the backstop for when someone bypasses .gitignore with -f.
         args: [--maxkb=500]
+        # infra/k8s/eso-crds.yaml (Milestone 29) is the External Secrets
+        # Operator's own 25 CRDs, rendered verbatim from the official
+        # external-secrets/external-secrets Helm chart (v2.9.0) -- the
+        # same file already given a narrow, documented exception below
+        # for detect-private-key, for the same underlying reason: its
+        # size (~1.9MB) is inherent to being a complete, unmodified,
+        # official vendor CRD bundle, not an accidentally-committed
+        # binary or generated artifact this hook exists to catch. Scoped
+        # to this exact file only -- every other file, including
+        # infra/k8s/lb-controller-crds.yaml (Milestone 21, well under
+        # the limit), is still checked normally.
+        exclude: ^infra/k8s/eso-crds\.yaml$
       - id: detect-private-key
+        # infra/k8s/eso-crds.yaml is the External Secrets Operator's own
+        # CRDs (Milestone 29), rendered verbatim from the official
+        # external-secrets/external-secrets Helm chart (v2.9.0) and never
+        # hand-edited. The hook flags two lines inside one CRD's OpenAPI
+        # schema `description:` field (documenting the expected JSON
+        # shape for a third-party provider integration this project does
+        # not use): a PEM-style header/footer pair wrapping the literal
+        # placeholder token "<private-key>" as an illustrative example --
+        # confirmed by direct inspection, no base64 body, not real key
+        # material. (Not reproduced verbatim in this comment: doing so
+        # once already made this very file trip the same hook.)
+        # Investigated and confirmed before this exclude was added, not
+        # assumed. Scoped to this exact file only -- detect-private-key
+        # still runs on every other file in the repository, including
+        # every other vendored CRD file (e.g.
+        # infra/k8s/lb-controller-crds.yaml, Milestone 21), which has
+        # never needed this and still does not.
+        exclude: ^infra/k8s/eso-crds\.yaml$
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable
       - id: forbid-submodules

@@ -49,6 +49,16 @@ spec:
           envFrom:
             - configMapRef:
                 name: fraudguard-config
+            # Milestone 29: fraudguard-secrets, ESO-managed
+            # (infra/k8s/external-secret-app.yaml). Wired here per
+            # approved M29 scope; feature-service's own code (Redis
+            # only, no auth configured -- REDIS_HOST/REDIS_PORT are in
+            # fraudguard-config, not this Secret) does not currently
+            # read anything from it. Harmless: unused env vars are
+            # simply ignored, and this stays forward-compatible with any
+            # future service dependency on a value in this Secret.
+            - secretRef:
+                name: fraudguard-secrets
           resources:
             requests:
               cpu: 100m
