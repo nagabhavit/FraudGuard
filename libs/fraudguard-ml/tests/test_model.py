@@ -39,7 +39,15 @@ def saved_model(tmp_path: Path) -> tuple[Path, Path]:
     booster = _train_tiny_booster()
     model_path = tmp_path / "model.txt"
     metadata_path = tmp_path / "model.meta.json"
-    save_model(booster, model_path, metadata_path, version="test-v1", auc=0.9)
+    save_model(
+        booster,
+        model_path,
+        metadata_path,
+        version="test-v1",
+        auc=0.9,
+        seed=0,
+        n_samples=64,
+    )
     return model_path, metadata_path
 
 
@@ -63,6 +71,18 @@ def test_load_round_trips_version_and_metadata(saved_model: tuple[Path, Path]) -
     model = FraudModel.load(model_path, metadata_path)
     assert model.version == "test-v1"
     assert model.metadata.auc == 0.9
+
+
+def test_save_model_records_seed_and_sample_count_for_reproducibility(
+    saved_model: tuple[Path, Path],
+) -> None:
+    """Milestone 26: a later reader of the metadata file can tell exactly
+    what generation parameters produced this model, not just when it was
+    trained."""
+    _, metadata_path = saved_model
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata["seed"] == 0
+    assert metadata["n_samples"] == 64
 
 
 def test_predict_proba_returns_a_probability(saved_model: tuple[Path, Path]) -> None:

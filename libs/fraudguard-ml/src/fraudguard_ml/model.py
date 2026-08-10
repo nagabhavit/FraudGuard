@@ -40,6 +40,8 @@ class ModelMetadata:
     feature_names: tuple[str, ...]
     trained_at: str
     auc: float
+    seed: int
+    n_samples: int
 
 
 class FraudModel:
@@ -88,6 +90,8 @@ class FraudModel:
             feature_names=tuple(raw["feature_names"]),
             trained_at=raw["trained_at"],
             auc=raw["auc"],
+            seed=raw["seed"],
+            n_samples=raw["n_samples"],
         )
         current_hash = feature_schema_hash()
         if metadata.feature_schema_hash != current_hash:
@@ -108,11 +112,19 @@ def save_model(
     *,
     version: str,
     auc: float,
+    seed: int,
+    n_samples: int,
 ) -> ModelMetadata:
     """Save `booster` and its metadata as a matched pair.
 
     Called only by `ml/pipelines/train.py` -- `model-service` only ever
     reads what this writes.
+
+    `seed` and `n_samples` are recorded, not just used, so a later reader
+    of `fraud_model.meta.json` can tell exactly what reproduces the
+    current model -- previously only `version`'s timestamp was recorded,
+    which identifies *when* a model was trained but not *how* (Milestone
+    26, ADR-0009's synthetic data generation left otherwise unrecorded).
     """
     metadata = ModelMetadata(
         version=version,
@@ -120,6 +132,8 @@ def save_model(
         feature_names=FEATURE_NAMES,
         trained_at=datetime.now(UTC).isoformat(),
         auc=auc,
+        seed=seed,
+        n_samples=n_samples,
     )
     model_path.parent.mkdir(parents=True, exist_ok=True)
     booster.save_model(str(model_path))

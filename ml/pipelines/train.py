@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,6 +28,18 @@ from fraudguard_ml import FEATURE_NAMES, save_model
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_MODEL_PATH = _REPO_ROOT / "ml" / "models" / "fraud_model.txt"
 _DEFAULT_METADATA_PATH = _REPO_ROOT / "ml" / "models" / "fraud_model.meta.json"
+# Milestone 26: fraud_model.txt/fraud_model.meta.json are the single
+# fixed-path pair model-service actually reads (LocalModelArtifactSettings)
+# -- always "whatever was trained most recently", overwritten every run,
+# unchanged here since a serving process reading "latest" from a fixed
+# path is correct runtime behavior. _DEFAULT_HISTORY_DIR is additive: a
+# per-version copy retained alongside, so a previous run's exact model
+# file and metadata (including the seed/n_samples that reproduce it) are
+# not silently lost the way they were before this milestone. Both stay
+# under ml/models/, already entirely gitignored (.gitignore) -- this
+# milestone does not change what gets committed, only what's retained
+# locally/in CI between runs.
+_DEFAULT_HISTORY_DIR = _REPO_ROOT / "ml" / "models" / "history"
 
 _DEFAULT_SAMPLE_COUNT = 20_000
 _VALIDATION_FRACTION = 0.2
@@ -99,6 +112,7 @@ def train(
     seed: int = 0,
     model_path: Path = _DEFAULT_MODEL_PATH,
     metadata_path: Path = _DEFAULT_METADATA_PATH,
+    history_dir: Path = _DEFAULT_HISTORY_DIR,
 ) -> None:
     rng = np.random.default_rng(seed)
     features, labels = _generate_synthetic_dataset(n_samples, rng)
@@ -134,13 +148,29 @@ def train(
     auc = _roc_auc(y_val, val_predictions)
 
     version = f"fraud-lgbm-{datetime.now(UTC):%Y%m%d-%H%M%S}"
-    metadata = save_model(booster, model_path, metadata_path, version=version, auc=auc)
+    metadata = save_model(
+        booster,
+        model_path,
+        metadata_path,
+        version=version,
+        auc=auc,
+        seed=seed,
+        n_samples=n_samples,
+    )
+
+    # Retain a per-version copy alongside the fixed-path pair -- see
+    # _DEFAULT_HISTORY_DIR's own comment for why this exists.
+    history_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(model_path, history_dir / f"{metadata.version}.txt")
+    shutil.copy2(metadata_path, history_dir / f"{metadata.version}.meta.json")
 
     print(f"trained {metadata.version}")
     print(f"  samples: {n_samples} (fraud rate {labels.mean():.2%})")
+    print(f"  seed: {seed}")
     print(f"  validation AUC: {auc:.4f}")
     print(f"  model:    {model_path}")
     print(f"  metadata: {metadata_path}")
+    print(f"  history:  {history_dir / metadata.version}.{{txt,meta.json}}")
 
 
 def _parse_args() -> argparse.Namespace:
@@ -149,6 +179,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--model-path", type=Path, default=_DEFAULT_MODEL_PATH)
     parser.add_argument("--metadata-path", type=Path, default=_DEFAULT_METADATA_PATH)
+    parser.add_argument("--history-dir", type=Path, default=_DEFAULT_HISTORY_DIR)
     return parser.parse_args()
 
 
@@ -159,4 +190,5 @@ if __name__ == "__main__":
         seed=args.seed,
         model_path=args.model_path,
         metadata_path=args.metadata_path,
+        history_dir=args.history_dir,
     )
