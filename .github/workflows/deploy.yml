@@ -1,0 +1,136 @@
+# =============================================================================
+# Deployment pipeline -- Milestone 31. See ADR-0020 and README.md.
+# =============================================================================
+#
+# NOTHING IN THIS WORKFLOW HAS EVER RUN. It requires all of the
+# following, none of which exist yet:
+#   - infra/terraform/ecr.tf and github_oidc.tf actually applied
+#   - AWS_ECR_PUSH_ROLE_ARN, AWS_DEPLOY_ROLE_ARN secrets and an ECR_REGISTRY
+#     variable configured in this repository's settings (not committed
+#     here -- there is nothing real to reference yet)
+#   - a real "production" GitHub Environment with required reviewers
+#     configured (deliberately not created by this milestone -- ADR-0020)
+# Even if manually triggered today, every AWS-calling step would fail
+# immediately for lack of real secrets. That is a backstop, not the
+# safety mechanism this design relies on -- see the trigger design below.
+#
+# TRIGGER DESIGN: workflow_dispatch only, both jobs -- not `push`.
+# Deliberately more conservative than a typical real-world pipeline
+# (which would usually build-and-push automatically on every push to
+# main). This milestone's explicit scope is "no automatic real
+# deployment" -- extended here to no automatic *build* either, so
+# nothing in this workflow can execute without a human explicitly
+# running it, layered on top of (not instead of) the missing-secrets
+# backstop above. Switching build-and-push to trigger on `push` once
+# real secrets exist is a natural, simple follow-up change, not decided
+# by this milestone.
+#
+# IMAGE TAG: the Git commit SHA (github.sha), never "latest" -- approved
+# M31 decision, matching ecr.tf's IMMUTABLE tag mutability setting.
+#
+# TWO SEPARATE IAM ROLES (infra/terraform/github_oidc.tf), each job using
+# only the one it needs -- build-and-push can push images but cannot
+# touch EKS; deploy can update the cluster but cannot push images.
+# =============================================================================
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build and push (${{ matrix.service }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      id-token: write # required for OIDC -- no long-lived AWS credentials
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - service: gateway
+            dockerfile: services/gateway/Dockerfile
+            context: .
+          - service: feature-service
+            dockerfile: services/feature-service/Dockerfile
+            context: .
+          - service: aggregator
+            dockerfile: services/aggregator/Dockerfile
+            context: .
+          - service: model-service
+            dockerfile: services/model-service/Dockerfile
+            context: .
+          - service: dashboard
+            dockerfile: dashboard/Dockerfile
+            context: ./dashboard
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Log in to ECR
+        run: |
+          aws ecr get-login-password --region us-east-1 \
+            | docker login --username AWS --password-stdin "${{ vars.ECR_REGISTRY }}"
+
+      - name: Build and push ${{ matrix.service }}
+        # Same context/dockerfile pairing as docker-compose.yml's own
+        # build blocks for this service -- not redefined independently.
+        run: |
+          docker build \
+            -f "${{ matrix.dockerfile }}" \
+            -t "${{ vars.ECR_REGISTRY }}/fraudguard-${{ matrix.service }}:${{ github.sha }}" \
+            "${{ matrix.context }}"
+          docker push "${{ vars.ECR_REGISTRY }}/fraudguard-${{ matrix.service }}:${{ github.sha }}"
+
+  deploy:
+    name: Deploy to EKS (production)
+    needs: build-and-push
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # References the "production" environment by name -- does NOT create
+    # or configure it. Until a human configures required reviewers on a
+    # real "production" GitHub Environment (ADR-0020, a deliberately
+    # separate, later, manual step), GitHub treats an unconfigured
+    # environment name as unprotected, not as "deploy blocked" -- the
+    # workflow_dispatch-only trigger above is this design's actual
+    # safety mechanism, not this line.
+    environment: production
+    permissions:
+      id-token: write # required for OIDC -- no long-lived AWS credentials
+      contents: read
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name fraudguard --region us-east-1
+
+      - name: Deploy application manifests
+        # kubectl set image, not `kubectl apply` of the committed
+        # manifests -- infra/k8s/*.yaml's image: lines are honest,
+        # unresolved placeholders (<ECR_REGISTRY>/fraudguard-*:<GIT_SHA>,
+        # this milestone), the same pattern as every other real-value-only-
+        # known-at-deploy-time field since Milestone 18. This is the one
+        # step that actually resolves them, at real deploy time only.
+        run: |
+          kubectl set image deployment/gateway gateway="${{ vars.ECR_REGISTRY }}/fraudguard-gateway:${{ github.sha }}" -n fraudguard
+          kubectl set image deployment/feature-service feature-service="${{ vars.ECR_REGISTRY }}/fraudguard-feature-service:${{ github.sha }}" -n fraudguard
+          kubectl set image deployment/aggregator aggregator="${{ vars.ECR_REGISTRY }}/fraudguard-aggregator:${{ github.sha }}" -n fraudguard
+          kubectl set image deployment/model-service model-service="${{ vars.ECR_REGISTRY }}/fraudguard-model-service:${{ github.sha }}" -n fraudguard
+          kubectl set image deployment/dashboard dashboard="${{ vars.ECR_REGISTRY }}/fraudguard-dashboard:${{ github.sha }}" -n fraudguard

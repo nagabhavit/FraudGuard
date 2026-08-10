@@ -36,10 +36,15 @@ spec:
     spec:
       containers:
         - name: dashboard
-          # Same local image docker-compose.yml already builds
-          # (dashboard/Dockerfile). Publishing this to a real registry
-          # (e.g. ECR) is deployment-pipeline work, Milestone 31.
-          image: fraudguard-dashboard:latest
+          # Milestone 31: infra/terraform/ecr.tf provisions this
+          # repository; .github/workflows/deploy.yml pushes a real image
+          # here, tagged with the Git commit SHA, never "latest"
+          # (IMMUTABLE tag mutability, ecr.tf). <ECR_REGISTRY> and
+          # <GIT_SHA> are unresolved placeholders -- the deploy job's
+          # `kubectl set image` step is what actually resolves them, at
+          # real deploy time only; this committed value is never
+          # directly applied.
+          image: "<ECR_REGISTRY>/fraudguard-dashboard:<GIT_SHA>"
           ports:
             - containerPort: 8080
           resources:

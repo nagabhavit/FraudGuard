@@ -4,6 +4,7 @@
 | --- | --- | --- |
 | `ci.yml` | push to main, pull request | Lockfile, lint, type check, tests, integration tests (full stack: Postgres, Redis, Kafka, Schema Registry, gateway, feature-service, aggregator, model-service), pre-commit hooks |
 | `security.yml` | push, pull request, weekly | Dependency audit and secret scanning |
+| `deploy.yml` | `workflow_dispatch` only (Milestone 31) | Build and push images to ECR, then deploy to EKS behind a manual production approval. See ADR-0020 -- nothing in this workflow has ever run; it requires Terraform applied, repository secrets/variables configured, and a real GitHub Environment, none of which exist yet. |
 
 ## Branch protection
 
@@ -26,8 +27,29 @@ Recommended settings:
 
 ## Action pinning
 
-Actions are referenced by major version tag. Dependabot (`.github/dependabot.yml`)
-proposes updates weekly. For a repository handling production payment traffic,
-the next hardening step is pinning to full commit SHAs so a compromised or
-retagged action cannot alter the build — that is scheduled with the deployment
-pipeline work in Milestone 31.
+Every `uses:` reference across all three workflow files is pinned to a full
+commit SHA, with a `# vX.Y.Z` comment recording the human-readable version —
+so a compromised or retagged action cannot alter the build (Milestone 31,
+ADR-0020). Dependabot (`.github/dependabot.yml`) still proposes updates
+weekly against the SHA-pinned references, exactly as it did against tags.
+
+## Deployment pipeline
+
+`deploy.yml` exists and is fully reviewed but has never run — see ADR-0020
+for the complete design (OIDC authentication, no long-lived AWS keys;
+immutable Git-commit-SHA image tags; a manual approval gate). Before it can
+do anything for real, someone with repository admin access must, as separate
+manual steps this milestone deliberately does not perform:
+
+1. Apply `infra/terraform/ecr.tf` and `infra/terraform/github_oidc.tf`
+   against a real AWS account.
+2. Configure this repository's `AWS_ECR_PUSH_ROLE_ARN` and
+   `AWS_DEPLOY_ROLE_ARN` secrets, and an `ECR_REGISTRY` variable, from that
+   Terraform's outputs.
+3. Create a real `production` GitHub Environment and configure required
+   reviewers on it.
+
+Note: no manual step is needed for `infra/k8s/*.yaml`'s
+`<ECR_REGISTRY>`/`<GIT_SHA>` placeholders — `deploy.yml`'s `kubectl set
+image` step resolves them to real values at deploy time; the committed
+manifests are never applied directly.
