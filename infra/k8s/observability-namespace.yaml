@@ -1,0 +1,13 @@
+# Namespace for the in-cluster observability stack -- plan/validate
+# only. Milestone 25 (ADR-0018).
+#
+# Separate from `fraudguard` (the application namespace) the same way
+# the AWS Load Balancer Controller and Metrics Server live in
+# kube-system rather than fraudguard -- cluster-wide observability
+# tooling is kept apart from the application it observes.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: fraudguard

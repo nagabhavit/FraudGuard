@@ -35,6 +35,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: aggregator
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
     spec:
       containers:
         - name: aggregator

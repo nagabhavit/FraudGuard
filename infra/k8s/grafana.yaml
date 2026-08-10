@@ -1,0 +1,255 @@
+# Grafana -- plan/validate only. Milestone 25 (ADR-0018).
+#
+# Datasource/dashboard-provider config and the dashboard JSON itself are
+# byte-for-byte identical to ops/grafana/provisioning/ and
+# ops/grafana/dashboards/fraudguard-overview.json (ADR-0010) -- reused,
+# not reinvented, only the datasource URL changed to this Service's
+# in-cluster DNS name.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: monitoring
+data:
+  datasource.yml: |
+    # Provisions the Prometheus datasource as code -- `docker compose up`
+    # produces a working, queryable Grafana with no manual "add datasource"
+    # click-through step. See ADR-0010.
+
+    apiVersion: 1
+
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.monitoring.svc.cluster.local:9090
+        isDefault: true
+        editable: false
+  dashboards.yml: |
+    # Provisions the dashboards under ops/grafana/dashboards/ as code -- see
+    # ADR-0010. `allowUiUpdates: false` because the dashboard's source of truth
+    # is the JSON file in git, not whatever a session's `docker compose up`
+    # happens to have accumulated in Grafana's own sqlite database.
+
+    apiVersion: 1
+
+    providers:
+      - name: FraudGuard
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: true
+        allowUiUpdates: false
+        updateIntervalSeconds: 30
+        options:
+          path: /etc/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+data:
+  fraudguard-overview.json: |
+    {
+      "title": "FraudGuard Overview",
+      "uid": "fraudguard-overview",
+      "editable": false,
+      "schemaVersion": 39,
+      "version": 1,
+      "timezone": "utc",
+      "time": { "from": "now-1h", "to": "now" },
+      "refresh": "10s",
+      "tags": ["fraudguard"],
+      "panels": [
+        {
+          "id": 1,
+          "title": "HTTP request rate, by service",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum by (service) (rate(fraudguard_http_request_duration_seconds_count[1m]))",
+              "legendFormat": "{{service}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "HTTP p99 latency, by service",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, service) (rate(fraudguard_http_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "{{service}}",
+              "refId": "A"
+            }
+          ],
+          "description": "Against the README's p99 <= 100ms hot-path budget for the gateway specifically -- the other three services have no such SLA of their own."
+        },
+        {
+          "id": 3,
+          "title": "Gateway decisions, by outcome",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "stacking": { "mode": "normal" } } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum by (outcome) (rate(fraudguard_gateway_decisions_total[5m]))",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Degradation ladder: fallback rate",
+          "type": "stat",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "x": 8, "y": 8, "w": 4, "h": 8 },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.01 },
+                  { "color": "red", "value": 0.1 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(fraudguard_gateway_decisions_total{used_model=\"false\"}[15m])) / sum(rate(fraudguard_gateway_decisions_total[15m]))",
+              "refId": "A"
+            }
+          ],
+          "description": "Share of decisions made by the ADR-0009 fallback rule (used_model=\"false\") rather than the model, over the trailing 15 minutes. Should be ~0 -- a sustained nonzero value means feature-service or model-service is degraded."
+        },
+        {
+          "id": 5,
+          "title": "Gateway scoring duration (feature-service + model-service)",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(fraudguard_gateway_scoring_duration_seconds_bucket[5m])))",
+              "legendFormat": "p99",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.5, sum by (le) (rate(fraudguard_gateway_scoring_duration_seconds_bucket[5m])))",
+              "legendFormat": "p50",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Aggregator messages processed, by outcome",
+          "type": "timeseries",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+          "fieldConfig": {
+            "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "fillOpacity": 10, "stacking": { "mode": "normal" } } },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "expr": "sum by (outcome) (rate(fraudguard_aggregator_messages_total[5m]))",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ],
+          "description": "\"skipped\" is ADR-0008's poison-message handling -- a nonzero, sustained rate here means messages are being decoded-or-applied incorrectly, not just occasionally."
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.4.0
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources/datasource.yml
+              subPath: datasource.yml
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yml
+              subPath: dashboards.yml
+            - name: dashboards
+              mountPath: /etc/grafana/dashboards
+      volumes:
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+spec:
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000

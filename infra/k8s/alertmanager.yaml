@@ -1,0 +1,89 @@
+# Alertmanager -- plan/validate only. Milestone 25 (ADR-0018).
+#
+# Config content is byte-for-byte identical to ops/alertmanager/
+# alertmanager.yml (ADR-0013) -- same null-receiver, no-real-on-call
+# posture, reused not reinvented. Wiring a real receiver remains
+# explicitly out of scope, unchanged from ADR-0013.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+data:
+  alertmanager.yml: |
+    # Alertmanager configuration. See ADR-0013.
+    #
+    # Local dev, single operator, no real on-call -- the same posture ADR-0010
+    # and ADR-0012 already accepted for Grafana's and the dashboard's anonymous
+    # access. The one route sends every alert to a "null" receiver: a receiver
+    # with no integrations configured, so a firing alert is visible in
+    # Alertmanager's own UI/API (http://localhost:9093) but pages no one.
+    # Wiring a real receiver (Slack/email/PagerDuty) is future work for a
+    # non-local deployment, not this milestone's scope.
+
+    route:
+      receiver: null-receiver
+      # Groups by alertname so a burst of the same alert (e.g. every service
+      # briefly flapping during `docker compose up`'s cold start) is one
+      # notification, not one per firing instance.
+      group_by: ["alertname"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+
+    receivers:
+      - name: null-receiver
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.28.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+          ports:
+            - containerPort: 9093
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager/alertmanager.yml
+              subPath: alertmanager.yml
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: alertmanager
+spec:
+  selector:
+    app.kubernetes.io/name: alertmanager
+  ports:
+    - port: 9093
+      targetPort: 9093

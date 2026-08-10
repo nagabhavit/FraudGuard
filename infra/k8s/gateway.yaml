@@ -34,6 +34,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
     spec:
       containers:
         - name: gateway

@@ -33,6 +33,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: feature-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
     spec:
       containers:
         - name: feature-service

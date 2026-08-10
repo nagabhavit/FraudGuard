@@ -36,6 +36,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: model-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8003"
     spec:
       containers:
         - name: model-service
