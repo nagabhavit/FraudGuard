@@ -10,6 +10,7 @@ carries a real decision, not just an acknowledgement.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated
@@ -221,6 +222,14 @@ async def _publish_transaction_received(
     depend on Kafka's availability, which ADR-0006 rules out. The gap this
     leaves -- persisted but never published -- is a known, documented
     limitation (ADR-0006), not an oversight.
+
+    Bounded by settings.kafka_publish_timeout_seconds (Milestone 27): a
+    publish to a missing topic was observed taking 30+ seconds via
+    aiokafka's own metadata-retry behavior, not a bounded few
+    milliseconds -- silently violating the hot-path budget even though
+    "does not fail the request" held. A timeout here still counts as a
+    publish failure below (asyncio.TimeoutError is an Exception), so
+    behavior on timeout is identical to any other publish failure.
     """
     record = {
         "event_id": str(uuid4()),
@@ -232,11 +241,15 @@ async def _publish_transaction_received(
         "occurred_at": transaction.occurred_at,
         "received_at": datetime.now(UTC),
     }
+    settings = request.app.state.settings
     try:
-        await request.app.state.events.publish(
-            TRANSACTIONS_V1,
-            key=str(transaction.account_id).encode(),
-            record=record,
+        await asyncio.wait_for(
+            request.app.state.events.publish(
+                TRANSACTIONS_V1,
+                key=str(transaction.account_id).encode(),
+                record=record,
+            ),
+            timeout=settings.kafka_publish_timeout_seconds,
         )
     except Exception:
         logger.exception(

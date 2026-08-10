@@ -34,6 +34,15 @@ class GatewaySettings(LocalDevSettings):
     # networking, not tuned to the README's p99 <= 100ms budget.
     scoring_timeout_seconds: float = 2.0
 
+    # Milestone 27: bounds the documented gap (docs/architecture.md) where
+    # a publish to a missing Kafka topic was observed taking 30+ seconds
+    # (aiokafka's own metadata-retry behavior) instead of a bounded few
+    # milliseconds, silently violating the hot-path budget above. Same
+    # value and "generous, not budget-tuned" reasoning as
+    # scoring_timeout_seconds -- this bounds the failure mode, it does not
+    # claim Kafka publishes normally take anywhere near this long.
+    kafka_publish_timeout_seconds: float = 2.0
+
     # ADR-0013: distinct from scoring_timeout_seconds above -- the README's
     # actual hot-path budget. A request that returns well inside the 2s
     # timeout can still have missed this, which is exactly the signal the
