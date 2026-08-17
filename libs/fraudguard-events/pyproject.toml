@@ -15,7 +15,7 @@ authors = [{ name = "Nagabhavit Pampati" }]
 dependencies = [
     "aiokafka>=0.14,<1",
     "fastavro>=1.9,<2",
-    "httpx2>=2.9,<3",
+    "httpx2>=2.10.0,<3",
 ]
 
 [build-system]

@@ -14,7 +14,7 @@ license = "Apache-2.0"
 authors = [{ name = "Nagabhavit Pampati" }]
 
 dependencies = [
-    "httpx2>=2.9,<3",
+    "httpx2>=2.10.0,<3",
 ]
 
 [build-system]
