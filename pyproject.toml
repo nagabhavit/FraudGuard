@@ -46,20 +46,20 @@ fraudguard-ml = { workspace = true }
 # `ruff format --check` fail on untouched files across the whole repository.
 # The pin must also stay in step with the rev in .pre-commit-config.yaml.
 [dependency-groups]
-lint = ["ruff==0.14.6"]
+lint = ["ruff==0.16.3"]
 typecheck = ["mypy>=1.18,<2"]
 test = [
     "pytest>=9.0.3,<10", # 8.x has PYSEC-2026-1845
     "pytest-asyncio>=1.2,<2",
-    "pytest-cov>=7.0,<8",
-    "httpx2>=2.9,<3",
+    "pytest-cov>=7.1.0,<8",
+    "httpx2>=2.10.0,<3",
 ]
 # Alembic and its sync driver are migration-time tools, never imported by a
 # running service -- see ADR-0005. Kept in their own group, not `dev`, so
 # `uv sync --all-packages --all-groups` (used for mypy/pre-commit) still
 # installs them, but no service's runtime dependency set ever does.
 migrate = [
-    "alembic>=1.13,<2",
+    "alembic>=1.19.1,<2",
     "psycopg[binary]>=3.2,<4",
 ]
 dev = [
@@ -67,7 +67,7 @@ dev = [
     { include-group = "typecheck" },
     { include-group = "test" },
     { include-group = "migrate" },
-    "pre-commit>=4.4,<5",
+    "pre-commit>=4.6.2,<5",
 ]
 
 # ---------------------------------------------------------------------------

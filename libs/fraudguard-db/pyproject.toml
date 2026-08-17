@@ -16,7 +16,7 @@ license = "Apache-2.0"
 authors = [{ name = "Nagabhavit Pampati" }]
 
 dependencies = [
-    "sqlalchemy>=2.0.36,<3",
+    "sqlalchemy>=2.0.52,<3",
     "asyncpg>=0.30,<1",
 ]
 

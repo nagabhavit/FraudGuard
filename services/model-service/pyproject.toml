@@ -19,7 +19,7 @@ dependencies = [
     "fastapi>=0.118,<1",
     "uvicorn[standard]>=0.38,<1",
     "pydantic>=2.10,<3",
-    "pydantic-settings>=2.7,<3",
+    "pydantic-settings>=2.15.0,<3",
     "fraudguard-common",
     "fraudguard-ml",
 ]
