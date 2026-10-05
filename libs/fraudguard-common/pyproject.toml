@@ -14,7 +14,7 @@ license = "Apache-2.0"
 authors = [{ name = "Nagabhavit Pampati" }]
 
 dependencies = [
-    "pydantic>=2.10,<3",
+    "pydantic>=2.13.5,<3",
     "pydantic-settings>=2.7,<3",
     "prometheus-client>=0.20,<1",
 ]
