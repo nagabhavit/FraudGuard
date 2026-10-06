@@ -36,18 +36,25 @@ Declared as code in `fraudguard_events.topics`, created explicitly by
 Schema Registry. See ADR-0006 for the client and serialization choices, and
 why a failed publish does not fail the request.
 
-**Known gap, found via Milestone 11's real-stack testing, not yet fixed:**
-"does not fail the request" is true, but a publish to a *missing* topic was
-observed taking on the order of 30+ seconds to give up and log the
-failure, not a bounded few milliseconds -- `aiokafka`'s own metadata-retry
-behavior, not application code, is what's slow here. This does not fail
-correctness (Postgres, written first, is still the system of record) but it
-does mean a missing topic silently violates the hot path's p99 <= 100 ms
-budget for whichever request happens to hit it, which "does not fail the
-request" alone does not capture. `docker-compose.yml`'s topic-creation step
-always runs before the stack is used in this project's own CI and local
-workflows, so this has not been observed causing a real failure -- it is
-recorded here as a known risk, not an incident.
+**Known gap, found via Milestone 11's real-stack testing, bounded (not
+eliminated) by Milestone 27:** "does not fail the request" is true, but a
+publish to a *missing* topic was observed taking on the order of 30+
+seconds to give up and log the failure, not a bounded few milliseconds --
+`aiokafka`'s own metadata-retry behavior, not application code, is what's
+slow here. Milestone 15's chaos testing (ADR-0015) later found the same
+failure mode more severe for a fully unreachable broker: one request took
+**43.1 seconds** to return during a live Kafka outage. `settings.
+kafka_publish_timeout_seconds` (`services/gateway/src/gateway/
+transactions.py`, default 2.0s, same value and "generous, not
+budget-tuned" reasoning as `scoring_timeout_seconds`) now wraps the
+publish in `asyncio.wait_for`, so this failure mode is bounded to a fixed
+few seconds rather than unbounded tens of seconds. It is a bound, not a
+fix: 2.0s still far exceeds the hot path's p99 <= 100 ms budget, so a slow
+or unreachable Kafka can still make an individual request miss that
+budget -- now a known, bounded cost instead of an open-ended one.
+`docker-compose.yml`'s topic-creation step always runs before the stack
+is used in this project's own CI and local workflows, so the missing-topic
+case has not been observed causing a real failure.
 
 ## Feature store
 
@@ -212,6 +219,11 @@ threat model to design against. CORS on the gateway is scoped to exactly
 one origin (`GatewaySettings.dashboard_origin`, matching `DASHBOARD_PORT`),
 not a wildcard.
 
+**Milestone 28 added label submission and browsing to the dashboard
+itself** -- a UI for the gateway's `POST /v1/transactions/{id}/labels`
+(ADR-0014/"Labels" below), rather than the gateway-only, no-UI state that
+milestone originally left it in.
+
 Verified against the real stack: `docker compose up -d --build` brings up
 all eleven containers healthy, including `dashboard`; a transaction posted
 to the gateway is visible via `GET /v1/transactions` and in the dashboard's
@@ -328,6 +340,213 @@ Verified locally, with no AWS account or credentials: `terraform init
 reuses Milestone 16's resources, it does not duplicate them. `main.tf` is
 byte-for-byte unchanged.
 
+## Load and chaos testing
+
+(Milestone 15, ADR-0015.) `services/simulator/src/simulator/load.py`
+(`python -m simulator.load`) is a duration-based, `asyncio.Semaphore`-
+bounded concurrent load driver reusing the existing `TransactionFactory`
+and `driver.send_transaction` unchanged; it reports client-observed
+p50/p95/p99 latency, explicitly distinct from the server-side
+`fraudguard_gateway_scoring_duration_seconds` histogram (ADR-0010).
+`ops/chaos/experiment.py` is a parameterized, self-verifying chaos
+script (`docker compose stop <target>` -> send traffic -> assert the
+degradation ladder's real signal -> `docker compose start <target>` ->
+poll for recovery) for `model-service`, `feature-service`, and Kafka.
+Neither tool runs in CI; both are documented, hand-executed procedures
+(ADR-0015).
+
+A real-stack finding changed what the Kafka experiment actually checks:
+the aggregator's `GET /health/ready` (`checks.kafka_consumer`) never
+leaves `"ok"` during a live broker outage -- `aiokafka` retries the lost
+connection internally without the consume loop ever raising, so
+`self.running` never flips. This is accepted as a known, documented
+observability limitation (`aggregator/health.py` and ADR-0008 are
+unchanged); the experiment instead verifies outage/recovery via the
+gateway's own `fraudguard_gateway_kafka_publish_total{outcome}` (ADR-0013),
+confirmed by direct measurement to flip to `"failure"` during a real
+Kafka outage -- one request took **43.1 seconds** to return (still a
+real model score, HTTP 200) before `kafka_publish_timeout_seconds`
+(Milestone 27, see "Kafka topics" above) bounded that failure mode -- and
+back to `"success"` within 0.76s of recovery.
+
+Verified against the real stack: all three chaos experiments
+(model-service, feature-service, kafka) pass end to end, degradation and
+recovery both confirmed; the stack returns to fully healthy after each.
+
+## EKS networking, managed add-ons, and IRSA
+
+(Milestones 18-20; no dedicated ADR -- each is a small, mechanical
+extension of the plan/validate-only posture ADR-0016/ADR-0017 already
+established, not an independent decision point.) `infra/terraform/
+networking.tf` (Milestone 18) adds two private subnets across the same
+two AZs `main.tf` already established, with a single NAT gateway for
+egress -- cost-optimized, not multi-AZ-HA, a deliberate tradeoff.
+`node_group.tf` was updated to place the EKS managed node group in these
+private subnets instead of the public ones. `infra/terraform/addons.tf`
+(Milestone 19) pins the three AWS-documented core add-ons (VPC CNI,
+CoreDNS, kube-proxy) to explicit versions verified against AWS's own
+per-add-on tables, rather than floating to "most recent." `infra/
+terraform/irsa.tf` (Milestone 20) adds the EKS cluster's OIDC provider --
+the prerequisite for IRSA, with no IAM role/policy/ServiceAccount created
+yet (those are each a later milestone's own scope).
+
+Verified locally, with no AWS account or credentials: `terraform init
+-backend=false && terraform validate` exits 0 against `infra/terraform/`
+for all three additions.
+
+## Load balancer ingress, autoscaling, and resource limits
+
+(Milestones 21-22; no dedicated ADR.) `infra/k8s/lb-controller.yaml` and
+`lb-controller-serviceaccount.yaml`/`lb-controller-crds.yaml` (Milestone
+21) render the AWS Load Balancer Controller via `helm template`, with its
+ServiceAccount and CRDs split into separate files so a chart re-render
+never clobbers the IRSA role-arn annotation. `infra/k8s/ingress.yaml`
+exposes the gateway only (not the dashboard) through an internet-facing
+ALB, HTTP-only pending a real registered domain. Milestone 22 adds
+`infra/k8s/metrics-server.yaml` (the official v0.9.0 release manifest,
+required for CPU/memory metrics to exist at all), `hpa.yaml`
+(`minReplicas: 1, maxReplicas: 3, targetCPUUtilizationPercentage: 70` --
+illustrative starting values, not load-test-derived capacity planning),
+and `pdb.yaml` (`maxUnavailable: 1` for all five application services).
+
+Verified locally, with no AWS account, credentials, or real cluster
+required for correctness: `helm template` output and all manifests pass
+`kubectl apply --dry-run=client`.
+
+## Managed datastores: RDS, ElastiCache, and MSK
+
+(Milestones 23-24; no dedicated ADR.) `infra/terraform/rds.tf` and
+`elasticache.tf` (Milestone 23) are the preferred production
+architecture for Postgres and Redis -- managed AWS services, not
+self-hosted StatefulSets in EKS -- matching `docker-compose.yml`'s major
+versions (Postgres 16, Redis 7) and using RDS's native
+`manage_master_user_password` instead of a Terraform-managed secret.
+Instance class, storage size, and `multi_az`/single-node sizing are
+illustrative, not capacity planning. `infra/terraform/msk.tf` (Milestone
+24) provisions a 4-broker MSK cluster -- not 3, a real AWS constraint
+(broker count must be an exact multiple of the subnet count, and
+Milestone 18 created exactly two private subnets) rather than a
+contradiction of the project's documented "3 brokers, RF=3" topology
+intent. Topic creation itself is deliberately left to imperative tooling
+(Milestone 29), the same posture already used for local Kafka topics.
+
+Verified locally, with no AWS account or credentials: `terraform init
+-backend=false && terraform validate` exits 0 against `infra/terraform/`
+for all three datastore files.
+
+## In-cluster observability for EKS
+
+(Milestone 25, ADR-0018.) A decision milestone, resolved explicitly by
+the project owner: in-cluster, self-hosted Prometheus + Grafana +
+Alertmanager in a new `monitoring` namespace, not Amazon Managed
+Prometheus/Grafana. Every existing Compose-based configuration is reused
+rather than reinvented -- alert rule content and Grafana's
+datasource/dashboard provisioning are byte-for-byte identical to
+`ops/prometheus/` and `ops/grafana/`'s sources, mounted as ConfigMaps.
+Scrape discovery is the one real adaptation: Compose's static target
+list becomes Prometheus's native `kubernetes_sd_configs` (role: `pod`,
+namespace: `fraudguard`), relabeled from `prometheus.io/scrape`/
+`prometheus.io/port` pod annotations -- no Prometheus Operator or new
+CRD introduced.
+
+Verified locally, with no AWS account, credentials, or cloud resource of
+any kind: `kubectl apply --dry-run=client` exits 0 for every new
+manifest; alert rule and dashboard/datasource content checked
+byte-for-byte identical to their Compose-stack sources.
+
+## Model training reproducibility and model history
+
+(Milestone 26.) `ml/pipelines/train.py` still writes the single
+fixed-path pair `ml/models/fraud_model.txt` / `fraud_model.meta.json`
+that `model-service` actually reads (always "whatever was trained most
+recently") -- unchanged, since that remains correct runtime behavior.
+Additively, every training run now also retains a timestamped copy of
+both files under `ml/models/history/`, so an earlier run's exact model
+artifact and metadata -- including the seed and sample count needed to
+reproduce it -- are no longer silently overwritten and lost. Both
+locations stay under `ml/models/`, already entirely gitignored; this
+milestone changes what is retained locally/in CI between runs, not what
+is committed to git.
+
+## Production secrets: External Secrets Operator
+
+(Milestone 29; no dedicated ADR.) `infra/k8s/eso.yaml`,
+`eso-serviceaccount.yaml`, and `eso-crds.yaml` render the External
+Secrets Operator (chart 2.9.0) via `helm template`, with
+`serviceAccount.name` explicitly pinned (verified necessary: leaving it
+to the chart's default would silently reference the literal `default`
+ServiceAccount instead of the IRSA-annotated one). `infra/k8s/
+secret-store.yaml` defines a cluster-scoped `ClusterSecretStore` reading
+AWS Secrets Manager via IRSA (`infra/terraform/eso_iam.tf`'s role);
+`external-secret-app.yaml` and `external-secret-grafana.yaml` are the two
+`ExternalSecret` resources populating the application's and Grafana's
+secrets into their respective namespaces. `infra/terraform/
+secrets_manager.tf` defines exactly one secret container (the Grafana
+admin password, populated out-of-band, never via Terraform) --
+PostgreSQL's own credential remains RDS's native
+`manage_master_user_password` (Milestone 23), not duplicated here. This
+is also the milestone `docker-compose.yml`'s own comments and
+`fraudguard_common.settings` have referenced by name since Milestone 16.
+
+Verified locally, with no AWS account, credentials, or real secret of any
+kind: `terraform init -backend=false && terraform validate` exits 0;
+`kubectl apply --dry-run=client` exits 0 for every new manifest.
+
+## EKS load and chaos validation
+
+(Milestone 30, ADR-0019.) Investigated directly against the actual code
+before assuming anything: `services/simulator/load.py` needs no changes
+to run against a real EKS deployment (`--base-url` is already a plain
+CLI argument), but `ops/chaos/experiment.py` does -- every outage
+injection shells out to `docker compose stop/start <target>`, which has
+no meaning against a real cluster. The two tools' EKS extension was
+therefore split by actual portability rather than treated as one task.
+`docs/runbooks/eks-load-and-chaos-validation.md` documents running
+`load.py` against a real Ingress URL once one exists, validating three
+of Milestone 30's five originally-scoped claims: latency, service
+availability, and resource/autoscaling behavior (Milestone 22's HPA,
+whose illustrative thresholds this is the real validation for). The
+other two claims -- degradation-ladder fallback behavior and Kafka
+degradation -- are **not** extended to EKS this milestone; building a
+Kubernetes-native outage-injection mechanism is named as a real, accepted
+gap, not silently dropped. Nothing in this milestone has been executed
+against a real cluster -- there is no real EKS deployment yet.
+
+## CI/CD deployment pipeline
+
+(Milestone 31, ADR-0020.) `infra/terraform/github_oidc.tf` adds a GitHub
+Actions OIDC provider and two narrowly-scoped IAM roles --
+`github_actions_ecr_push` (ECR push only) and `github_actions_deploy`
+(`eks:DescribeCluster` plus an EKS access entry), gated by distinct OIDC
+`sub` trust conditions so no single job ever holds both ECR-push and
+EKS-deploy permissions. No AWS access key is ever generated or stored as
+a GitHub secret. `infra/terraform/ecr.tf` provisions five
+`IMMUTABLE`-tagged ECR repositories; `.github/workflows/deploy.yml` tags
+every build with `${{ github.sha }}`, never `latest`. All 15 `uses:`
+references across the three workflow files are pinned to a full commit
+SHA with a `# vX.Y.Z` comment, verified against upstream immediately
+before implementation (closing the gap `.github/workflows/README.md` had
+scheduled here since Milestone 16).
+
+Both of `deploy.yml`'s jobs trigger on `workflow_dispatch` only -- nothing
+in this workflow executes without a human explicitly running it. This is
+deliberately layered with, not a substitute for, the `production` GitHub
+Environment's required-reviewer gate the job also references: that live
+Environment, and the `AWS_ECR_PUSH_ROLE_ARN`/`AWS_DEPLOY_ROLE_ARN`
+secrets and `ECR_REGISTRY` variable `deploy.yml` depends on, do not exist
+in the repository yet -- a deliberately separate, later manual step, not
+done by this milestone. `main`'s branch protection remains a real,
+pre-existing, unrelated gap, named here and left unfixed, out of this
+milestone's scope.
+
+Verified: `terraform validate` exits 0 for `ecr.tf`/`github_oidc.tf`;
+`actionlint` exits 0 for all three workflow files; `kubectl apply
+--dry-run=client` exits 0 for the five updated application manifests. No
+live GitHub Environment or branch protection rule was created or
+modified -- checked via read-only `gh api` calls before and after. No AWS
+credentials were used; nothing in this milestone has ever been applied
+or executed.
+
 ## Current implementation status
 
 | Component | State |
@@ -347,6 +566,15 @@ byte-for-byte unchanged.
 | Labels | Implemented — `gateway/labels.py`'s `POST /v1/transactions/{id}/labels` (ADR-0014) writes to the previously-unused `labels` table (ADR-0005); `GET /v1/transactions` embeds each transaction's labels; `ml/pipelines/train.py` still trains on synthetic data only, unchanged |
 | Kubernetes / Terraform scaffolding | Implemented — `infra/terraform/` (a hand-written, plan/validate-only EKS cluster skeleton) and `infra/k8s/` (Deployment/Service manifests for the five application services, ADR-0016); no AWS credentials used, no `terraform apply`, no real cluster ever provisioned |
 | EKS node group scaffolding | Implemented — `infra/terraform/node_group.tf` (a plan/validate-only managed node group: worker IAM role + 3 required policy attachments + the node group itself, reusing Milestone 16's cluster and public subnets, ADR-0017); `main.tf` unmodified; no AWS credentials used, no `terraform apply`, no real node ever launched |
+| Load and chaos testing | Implemented — `services/simulator/load.py` (duration-based concurrent load driver, p50/p95/p99 latency) and `ops/chaos/experiment.py` (self-verifying outage/recovery scripts for model-service, feature-service, Kafka), ADR-0015; not wired into CI, hand-executed procedures |
+| EKS networking, add-ons, IRSA | Implemented — `infra/terraform/networking.tf` (private subnets + single NAT gateway), `addons.tf` (pinned VPC CNI/CoreDNS/kube-proxy), `irsa.tf` (OIDC provider), Milestones 18-20; plan/validate-only, no AWS credentials used |
+| EKS ingress, autoscaling, resource limits | Implemented — `infra/k8s/lb-controller*.yaml` + `ingress.yaml` (gateway-only ALB, Milestone 21), `metrics-server.yaml` + `hpa.yaml` + `pdb.yaml` (illustrative thresholds, Milestone 22); plan/validate-only |
+| Managed datastores (RDS, ElastiCache, MSK) | Implemented — `infra/terraform/rds.tf` + `elasticache.tf` (Milestone 23), `msk.tf` (4-broker cluster, a real AWS subnet-count constraint, Milestone 24); plan/validate-only, no AWS credentials used |
+| In-cluster observability for EKS | Implemented — `infra/k8s/prometheus.yaml` + `grafana.yaml` + `alertmanager.yaml` + `observability-namespace.yaml` (Milestone 25, ADR-0018); reuses Compose-based config byte-for-byte via `kubernetes_sd_configs`, no Prometheus Operator |
+| Model training reproducibility | Implemented — `ml/pipelines/train.py` additionally retains a timestamped copy of every trained model + metadata under `ml/models/history/` (Milestone 26); the fixed-path pair `model-service` reads is unchanged |
+| Production secrets (External Secrets Operator) | Implemented — `infra/k8s/eso*.yaml` + `external-secret-*.yaml` + `secret-store.yaml`, `infra/terraform/eso_iam.tf` + `secrets_manager.tf` (Milestone 29); plan/validate-only, no real secret or AWS credentials used |
+| EKS load and chaos validation | Partially extended — `docs/runbooks/eks-load-and-chaos-validation.md` (Milestone 30, ADR-0019): `load.py` needs no change to target a real cluster; `ops/chaos/experiment.py`'s Docker-Compose coupling means fallback/Kafka chaos validation is *not* extended to EKS, a named, accepted gap |
+| CI/CD deployment pipeline | Implemented, not yet runnable — `.github/workflows/deploy.yml` (`workflow_dispatch`-only), `infra/terraform/ecr.tf` + `github_oidc.tf` (OIDC federation, two narrowly-scoped IAM roles, SHA-pinned images), Milestone 31, ADR-0020; no live GitHub Environment, no repository secrets, nothing ever applied or executed |
 
 ## Milestones
 
@@ -370,7 +598,22 @@ scope is not yet fully specified.
 | 15 | Load and chaos testing | A concurrent load driver (`simulator/load.py`) and scripted, self-verifying chaos experiments (`ops/chaos/`) for the degradation ladder and aggregator recovery (ADR-0015) |
 | 16 | Kubernetes / Terraform scaffolding | A plan/validate-only EKS cluster skeleton and Kubernetes manifests for the application services -- no AWS credentials, no `apply`, no real cluster (ADR-0016) |
 | 17 | EKS node group scaffolding | A plan/validate-only EKS managed node group (worker IAM role, required policy attachments, the node group itself), reusing Milestone 16's cluster and subnets -- no AWS credentials, no `apply`, no real node (ADR-0017). Scoped by explicit approval, not a repository hint: an exhaustive git-history search found no evidence Milestone 17 was ever defined anywhere. |
-| 18+ | Unscoped | Milestones 18-28 and 30 have no defined scope anywhere in this repository. Milestone 29 (production secrets/config via AWS Secrets Manager, production Kafka topology) and Milestone 31 (CI/CD deployment pipeline, Action SHA-pinning) are referenced by name elsewhere in the codebase (`.env.example`, `docker-compose.yml`, `fraudguard_common.settings`, `.github/workflows/README.md`) but not yet designed here. |
+| 18 | EKS private networking | Two private subnets (two AZs) + single NAT gateway for the EKS node group, reusing Milestone 16's VPC; cost-optimized, not multi-AZ-HA. No AWS credentials, no `apply`. No dedicated ADR. |
+| 19 | EKS managed add-ons | VPC CNI, CoreDNS, kube-proxy pinned to explicit, verified versions (`infra/terraform/addons.tf`). No AWS credentials, no `apply`. No dedicated ADR. |
+| 20 | EKS OIDC provider for IRSA | `infra/terraform/irsa.tf`'s OIDC provider -- the prerequisite for every later IRSA role (Milestones 21, 29). No IAM role/policy created yet. No AWS credentials, no `apply`. No dedicated ADR. |
+| 21 | AWS Load Balancer Controller + Ingress | Helm-rendered controller (`infra/k8s/lb-controller*.yaml`) and a gateway-only, HTTP-only ALB Ingress (`ingress.yaml`). No AWS credentials, no `apply`. No dedicated ADR. |
+| 22 | Autoscaling and resource limits | Metrics Server, HPA (illustrative `1-3` replicas / 70% CPU), and PDBs (`maxUnavailable: 1`) for all five application services. No dedicated ADR; real tuning deferred to Milestone 30. |
+| 23 | Managed datastores: RDS + ElastiCache | Production Postgres/Redis via RDS and ElastiCache instead of self-hosted StatefulSets, matching Compose's major versions. No AWS credentials, no `apply`. No dedicated ADR. |
+| 24 | Managed Kafka: AWS MSK | A 4-broker MSK cluster (AWS's subnet-count constraint, not a topology change); topic creation deferred to Milestone 29. No AWS credentials, no `apply`. No dedicated ADR. |
+| 25 | Observability architecture for EKS | In-cluster, self-hosted Prometheus + Grafana + Alertmanager (a decision milestone), reusing every Compose-based config byte-for-byte via native `kubernetes_sd_configs` (ADR-0018). |
+| 26 | Training reproducibility and model history | `ml/pipelines/train.py` additionally retains a timestamped copy of every trained model + metadata under `ml/models/history/`, alongside the unchanged fixed-path pair `model-service` reads. No dedicated ADR. |
+| 27 | Bound the Kafka publish timeout | `settings.kafka_publish_timeout_seconds` wraps the gateway's best-effort Kafka publish in `asyncio.wait_for`, bounding (not eliminating) the unbounded 30+s/43.1s hang ADR-0006's "Known gap" and Milestone 15's chaos testing found. No dedicated ADR. |
+| 28 | Dashboard label submission and browsing | A dashboard UI for the gateway's existing `POST /v1/transactions/{id}/labels` (ADR-0014), closing the "no dashboard UI" gap that milestone's ADR explicitly left open. No dedicated ADR. |
+| 29 | External Secrets Operator and production secrets | ESO (Helm-rendered) + a `ClusterSecretStore` reading AWS Secrets Manager via IRSA, wiring production application/Grafana secrets; Postgres keeps RDS's own native secret (Milestone 23). No AWS credentials, no `apply`. No dedicated ADR. |
+| 30 | EKS load and chaos validation | `docs/runbooks/eks-load-and-chaos-validation.md` (ADR-0019): `load.py` extends to a real EKS deployment unchanged; `ops/chaos/experiment.py`'s Docker-Compose coupling means chaos (fallback/Kafka) validation is explicitly *not* extended -- a named, accepted gap. |
+| 31 | CI/CD deployment pipeline | GitHub Actions OIDC federation, two narrowly-scoped IAM roles, immutable SHA-tagged ECR images, full SHA-pinning of all workflow `uses:` references, `workflow_dispatch`-only triggers (ADR-0020). Nothing has been applied, deployed, or executed -- no live Environment, no repository secrets exist yet. |
+
+No milestone beyond 31 is referenced anywhere in this repository.
 
 ## Degradation ladder
 

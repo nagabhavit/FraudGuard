@@ -28,8 +28,20 @@ in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 > any service being down, aggregator poison messages, and Kafka publish
 > failures -- a null/log receiver, local dev only (ADR-0013). The gateway
 > now also accepts ground-truth labels arriving after the fact --
-> `POST /v1/transactions/{id}/labels`, embedded in the dashboard's feed
-> (ADR-0014). Remaining work is tracked in
+> `POST /v1/transactions/{id}/labels`, with a dashboard UI to submit and
+> browse them (ADR-0014, Milestone 28). A load driver and chaos
+> experiments (ADR-0015) turn the hot-path latency budget and the
+> degradation ladder's failure-recovery behavior into repeatable,
+> hand-run tools. A plan/validate-only Terraform/Kubernetes skeleton for
+> the eventual production target, Amazon EKS, now covers networking,
+> managed add-ons, IRSA, an ALB Ingress, autoscaling, managed RDS/
+> ElastiCache/MSK datastores, in-cluster observability (ADR-0018), and
+> External Secrets Operator-managed production secrets -- and a
+> `workflow_dispatch`-only CI/CD pipeline (ADR-0020) exists to build and
+> deploy it, via OIDC federation and immutable SHA-tagged images. **None
+> of this infrastructure has ever been applied: no AWS credentials are
+> used anywhere, and no real cloud resource of any kind exists because of
+> it.** Remaining work is tracked in
 > [`docs/architecture.md`](docs/architecture.md).
 
 ---
@@ -224,10 +236,16 @@ docker compose down -v    # stop, delete volumes
 
 ## Kubernetes and Terraform (plan/validate only)
 
-`infra/terraform/` and `infra/k8s/` (ADR-0016) are a plan/validate-only
-skeleton for the eventual production deployment target -- Amazon EKS. No
-AWS credentials are used or required; `terraform apply` is never run; no
-real cloud resource or long-lived cluster is created by validating this.
+`infra/terraform/` and `infra/k8s/` (ADR-0016, now extended through
+Milestone 31 -- see `docs/architecture.md` for the full list) are a
+plan/validate-only skeleton for the eventual production deployment
+target, Amazon EKS: cluster, node group, private networking, pinned
+add-ons, IRSA, an AWS Load Balancer Controller Ingress, autoscaling,
+managed RDS/ElastiCache/MSK datastores, in-cluster observability
+(ADR-0018), External Secrets Operator-managed secrets, and a CI/CD
+pipeline (ADR-0020). No AWS credentials are used or required anywhere;
+`terraform apply` is never run; no real cloud resource or long-lived
+cluster is created by validating any of it.
 
 ```bash
 # Terraform: no AWS credentials needed -- this only checks internal
@@ -362,8 +380,12 @@ context, the decision, the alternatives considered, and the consequences.
 | [0012](docs/adr/0012-dashboard-read-api.md) | The gateway gains a read-only, unauthenticated `GET /v1/transactions` for the new `dashboard/` React ops console, instead of a new query service |
 | [0013](docs/adr/0013-alerting.md) | Prometheus Alertmanager (a null/log receiver, local dev only) with five alert rules; new metrics close the hot-path-budget-vs-timeout gap and the Kafka-publish-failure gap |
 | [0014](docs/adr/0014-labels-write-api.md) | The gateway gains a write endpoint, `POST /v1/transactions/{id}/labels`, for ground-truth labels, instead of a new `services/labels`; `GET /v1/transactions` embeds them |
+| [0015](docs/adr/0015-load-and-chaos-testing.md) | A duration-based concurrent load driver (`simulator/load.py`) and self-verifying chaos experiments (`ops/chaos/`) for the degradation ladder and aggregator recovery, hand-executed, not wired into CI |
 | [0016](docs/adr/0016-kubernetes-and-terraform-scaffolding.md) | A plan/validate-only EKS cluster skeleton (`infra/terraform/`) and Kubernetes manifests for the application services (`infra/k8s/`) -- no AWS credentials, no `apply`, no real cluster |
 | [0017](docs/adr/0017-eks-node-group-scaffolding.md) | A plan/validate-only EKS managed node group (`infra/terraform/node_group.tf`), reusing Milestone 16's cluster and public subnets -- no AWS credentials, no `apply`, no real node |
+| [0018](docs/adr/0018-observability-architecture.md) | In-cluster, self-hosted Prometheus + Grafana + Alertmanager for the EKS deployment, reusing the Compose stack's config byte-for-byte via native `kubernetes_sd_configs` -- no AWS credentials, no `apply` |
+| [0019](docs/adr/0019-eks-load-and-chaos-validation.md) | Extends the load driver (not the chaos scripts, a named gap) to validate latency, availability, and autoscaling against a real future EKS deployment; nothing executed against a real cluster yet |
+| [0020](docs/adr/0020-cicd-deployment-pipeline.md) | A `workflow_dispatch`-only CI/CD pipeline: GitHub Actions OIDC federation, two narrowly-scoped IAM roles, immutable SHA-tagged ECR images -- nothing applied, deployed, or executed yet |
 
 ---
 
