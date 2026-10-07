@@ -10,8 +10,9 @@ the same three string values the gateway will map back into
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
@@ -48,6 +49,22 @@ def _outcome_for(
     return "review"
 
 
+def _score_row(model: Any, row: list[float]) -> tuple[float, list[str]]:
+    """Run the synchronous, CPU-bound LightGBM calls off the event loop.
+
+    predict_proba()/explain() are plain, blocking calls with no await
+    inside either -- running them directly in the async route handler
+    blocks uvicorn's single event loop for their full duration, so one
+    request's inference stalls every other concurrent request.
+    asyncio.to_thread() (below) moves this one pair of calls to the
+    default executor's thread pool so the event loop stays free to
+    dispatch other requests meanwhile.
+    """
+    risk_score = model.predict_proba(row)
+    reason_codes = model.explain(row)
+    return risk_score, reason_codes
+
+
 @router.post("/v1/score", response_model=ScoreResponse)
 async def score(payload: ScoreRequest, request: Request) -> ScoreResponse:
     row = build_feature_row(
@@ -58,8 +75,7 @@ async def score(payload: ScoreRequest, request: Request) -> ScoreResponse:
         distinct_merchants_24h=payload.distinct_merchants_24h,
     )
     model = request.app.state.model
-    risk_score = model.predict_proba(row)
-    reason_codes = model.explain(row)
+    risk_score, reason_codes = await asyncio.to_thread(_score_row, model, row)
 
     settings = request.app.state.settings
     outcome = _outcome_for(

@@ -57,7 +57,12 @@ class FraudModel:
 
     def predict_proba(self, row: list[float]) -> float:
         """Probability the transaction described by `row` is fraudulent."""
-        prediction = self._booster.predict(np.array([row]))
+        # num_threads=1: this is always exactly one row (see the [row] wrap
+        # below) -- LightGBM's default threading splits parallel work across
+        # rows, so a single-row call has nothing to split and only pays the
+        # thread-spawn/scheduling cost. Pinning to 1 removes that overhead
+        # and the cross-request contention it causes under concurrency.
+        prediction = self._booster.predict(np.array([row]), num_threads=1)
         return float(np.asarray(prediction)[0])
 
     def explain(
@@ -71,7 +76,7 @@ class FraudModel:
         it is not a feature and has no name to report.
         """
         contributions = np.asarray(
-            self._booster.predict(np.array([row]), pred_contrib=True)
+            self._booster.predict(np.array([row]), pred_contrib=True, num_threads=1)
         )[0]
         feature_contributions = contributions[: len(FEATURE_NAMES)]
         ranked = sorted(
