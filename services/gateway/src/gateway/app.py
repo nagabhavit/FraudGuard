@@ -104,13 +104,17 @@ def create_app(
     )
 
     app.add_middleware(RequestContextMiddleware, service_name=settings.service_name)
-    # ADR-0012: only the dashboard's own origin, only GET -- it is the one
-    # legitimate browser caller of this API, and the only route it calls is
-    # the read-only transaction feed.
+    # ADR-0012/ADR-0014: only the dashboard's own origin -- it is the one
+    # legitimate browser caller of this API. GET for the read-only
+    # transaction feed, POST for ADR-0014's label submission
+    # (POST /v1/transactions/{id}/labels) -- without POST here, the
+    # browser's own CORS preflight (OPTIONS) rejects that request before
+    # it ever reaches the route, independent of the route itself being
+    # correct.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.dashboard_origin],
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],
         allow_headers=["*"],
         allow_credentials=False,
     )
