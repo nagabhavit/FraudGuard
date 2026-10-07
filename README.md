@@ -41,7 +41,15 @@ in the payment authorization path against a hard budget of **p99 ≤ 100 ms**.
 > deploy it, via OIDC federation and immutable SHA-tagged images. **None
 > of this infrastructure has ever been applied: no AWS credentials are
 > used anywhere, and no real cloud resource of any kind exists because of
-> it.** Remaining work is tracked in
+> it.** The dashboard has since been redesigned into six pages (Overview,
+> Transactions, Investigations, Models, Analytics, System Health) with an
+> investigation drawer and INR display (display-only; stored amounts are
+> still USD). A real-stack investigation found and fixed a model-service
+> concurrency bottleneck (bounding, not eliminating, the hot-path budget
+> gap) and, separately, a browser-only CORS gap that silently broke label
+> submission since Milestone 28 -- both fixed and re-verified against the
+> real stack, including in an actual browser. Full detail, exact commits,
+> and current validation/deployment-readiness status are in
 > [`docs/architecture.md`](docs/architecture.md).
 
 ---
@@ -84,7 +92,7 @@ refreshes what the hot path reads. Full design: [`docs/architecture.md`](docs/ar
 | Model | LightGBM | Gradient-boosted trees beat deep learning on tabular fraud data, train in minutes, infer in single-digit ms, and produce SHAP explanations regulators accept |
 | Metrics | Prometheus + Grafana | Pull-based scraping needs no push client or retry logic in the hot path; provisioned as code so `docker compose up` yields a working dashboard (ADR-0010) |
 | Alerting | Prometheus Alertmanager | Same pull-based ecosystem as metrics; provisioned as code, a null/log receiver for this local, single-operator deployment (ADR-0013) |
-| Dashboard | React + TypeScript | Type safety across the API boundary |
+| Dashboard | React + TypeScript, React Router, Recharts, Lucide icons | Type safety across the API boundary; six-page app with routing and charts over the same read-only feed |
 | Packaging | uv workspace | One lockfile, per-service dependency subtrees |
 
 ---
@@ -151,9 +159,12 @@ notification integration is configured, ADR-0013) to see firing alerts:
 `FraudGuardKafkaPublishFailures`.
 
 Open the FraudGuard dashboard at <http://localhost:8080> (also unauthenticated,
-local dev only -- ADR-0012) for a live-polling feed of individual transactions
-and their decisions -- the drill-down view Grafana's aggregate panels don't
-give you.
+local dev only -- ADR-0012) -- Overview, Transactions, Investigations, Models,
+Analytics, and System Health pages, all reading the same live-polling
+`GET /v1/transactions` feed, plus the investigation drawer and labeling
+actions (Mark Legitimate / Confirm Fraud / Needs Review) for the drill-down
+view Grafana's aggregate panels don't give you. Amounts display in INR
+(display-only; see `docs/architecture.md`).
 
 Send a transaction. The gateway scores it inline against feature-service
 and model-service and returns a real decision (ADR-0009); a few seconds

@@ -205,10 +205,13 @@ session ADR-0005 built, and this read is cheap enough (indexed Postgres,
 no feature-service/model-service calls) not to compete with the hot path
 for either dependency.
 
-The dashboard polls that endpoint every five seconds and renders a table:
-time, account, merchant, amount, outcome, risk score, model version (or
+The dashboard polls that endpoint every five seconds. What it renders
+with that data has since been redesigned (see "Dashboard redesign and
+INR display" below) into a six-page application rather than the single
+table originally described here; the underlying read contract -- time,
+account, merchant, amount, outcome, risk score, model version (or
 "fallback rule" when `model_version` is null -- the same ADR-0005 signal
-the degradation ladder already uses), and reason codes.
+the degradation ladder already uses), and reason codes -- is unchanged.
 
 **No authentication**, the same posture Grafana already ships with
 (anonymous admin access, local dev only): there is exactly one operator in
@@ -217,7 +220,10 @@ auth boundary here would conflate a visibility milestone with an
 access-control decision that deserves its own ADR once there is a real
 threat model to design against. CORS on the gateway is scoped to exactly
 one origin (`GatewaySettings.dashboard_origin`, matching `DASHBOARD_PORT`),
-not a wildcard.
+not a wildcard, and now allows both `GET` and `POST` (see "Browser-validated
+CORS fix for label submission" below -- `POST` was missing from this
+policy from Milestone 28 until commit `794b26f`, a real gap only a real
+browser's own CORS preflight enforcement could surface).
 
 **Milestone 28 added label submission and browsing to the dashboard
 itself** -- a UI for the gateway's `POST /v1/transactions/{id}/labels`
@@ -547,6 +553,132 @@ modified -- checked via read-only `gh api` calls before and after. No AWS
 credentials were used; nothing in this milestone has ever been applied
 or executed.
 
+## Model-service concurrency fix
+
+(Commit `6d805c7`, no dedicated ADR.) A real-stack load investigation found
+the hot path's actual latency under concurrency badly missed the p99 <=
+100 ms budget referenced throughout this document -- not just by a
+missing-Kafka-topic edge case, but as the normal case under any
+concurrent load. Root-caused to two distinct problems in
+`model-service`, both fixed:
+
+1. **Unbounded OpenMP thread fan-out per single-row prediction.**
+   `fraudguard_ml.model.FraudModel.predict_proba`/`explain` called
+   LightGBM's `Booster.predict()` with no `num_threads`, so every
+   single-row scoring call defaulted to spinning up threads across all
+   CPUs visible to the container -- pure overhead for a batch of one,
+   and a source of cross-request contention under concurrency. Fixed by
+   pinning `num_threads=1` on both calls.
+2. **Synchronous inference blocking the single event loop.**
+   `model-service`'s `POST /v1/score` handler is `async def`, but called
+   the (now cheaper, still synchronous) inference directly inline, with
+   no thread-pool offload and no `--workers` flag on uvicorn -- so
+   concurrent requests queued behind one another rather than running in
+   parallel. Fixed by wrapping the inference call in
+   `asyncio.to_thread()` in `services/model-service/src/model_service/scoring.py`.
+
+Measured directly against the real stack, before and after, via
+`simulator/load.py`: at concurrency 1, the full `POST /v1/transactions`
+average dropped from 335.3ms to 149.7ms; at concurrency 5, from 661.1ms
+to 208.2ms, with the scoring step alone (feature-service + model-service)
+dropping from 362.4ms to 53.5ms. **This bounds, it does not eliminate,
+the gap**: even the best case here (149.7ms) still exceeds the README's
+p99 <= 100ms budget, because two Postgres commits and the Kafka publish
+(see "Kafka topics" above) remain on the critical path, untouched by
+this fix -- a separate, still-open gap, investigated but deliberately
+not fixed in this change.
+
+Verified against the real stack: isolated model-service benchmarks
+(bypassing the gateway) at concurrency 1/5/10 before and after both
+fixes; the concurrency=10 throughput regression present before the fix
+(19.3 req/s, worse than concurrency=5's 19.5 req/s) is resolved after
+(33.2 req/s, now higher than concurrency=5's 24.7 req/s, the expected
+direction). `num_threads=1` and `asyncio.to_thread()` confirmed present
+in code as of this document's last update.
+
+## Dashboard redesign and INR display
+
+(Commits `c40179c`, `2937489`, no dedicated ADR.) The single-table
+dashboard described above was fully redesigned into a six-page
+application: Overview (KPI cards, risk/outcome distribution, live
+transaction stream), Transactions (search/filter/sort + the same feed),
+Investigations (real-data groupings: high risk, needs review, recently
+flagged, manually labeled), Models (only fields the API actually exposes
+-- model version, prediction volume and latency from `/metrics`, the
+known static feature schema; AUC/deployment status explicitly labeled
+"not exposed via API" rather than invented), Analytics (volume over time,
+risk/outcome/amount distribution, reason-code frequency, all from real
+`GET /v1/transactions` data and the gateway's `/metrics`, both already
+CORS-enabled -- no backend change was needed to build this), and System
+Health (gateway/Postgres via direct health-endpoint probes; model/Kafka
+health inferred from `/metrics` counters, labeled as inferred, not
+measured). A collapsible sidebar, an investigation drawer, and toast
+feedback replace the original flat table. New frontend dependencies:
+`react-router-dom`, `recharts`, `lucide-react`.
+
+Transaction amounts display in INR (₹) instead of USD ($) -- display
+only. `dashboard/src/lib/format.ts` defines one fixed, explicit,
+non-live rate (`USD_TO_INR_DISPLAY_RATE = 83`) and respects the API's
+own `currency` field: only `"USD"` (the only value this system currently
+produces) is converted for display; any other reported currency would
+render unconverted, in its own currency, never silently relabeled. No
+backend, database, Kafka, Redis, or model behavior changed; stored
+amounts and the `currency` field itself are untouched.
+
+Verified against the real stack: all six pages inspected live in a real
+browser against the running gateway with real transaction data; risk
+meters, decision badges, reason-code chips, search/filter/sort, the
+investigation drawer, sidebar collapse, and live refresh all confirmed
+working with zero browser console errors.
+
+## Browser-validated CORS fix for label submission
+
+(Commit `794b26f`, no dedicated ADR.) Real-browser validation of the
+redesigned dashboard found `POST /v1/transactions/{id}/labels` silently
+failing: the gateway's `CORSMiddleware` (`services/gateway/src/gateway/app.py`)
+set `allow_methods=["GET"]`, a restriction dating to ADR-0012 before
+ADR-0014's label endpoint existed and never revisited when it was added.
+A browser's CORS preflight (`OPTIONS`) rejects a cross-origin `POST`
+under that policy before the request ever reaches the route -- invisible
+to this project's own test suite (`TestClient`/jsdom neither enforce
+CORS) and to `curl`-based manual testing (curl doesn't enforce it
+either), so the bug went undetected until the dashboard's three labeling
+actions (Mark Legitimate, Confirm Fraud, Needs Review) were exercised
+through an actual browser. Fixed by widening `allow_methods` to
+`["GET", "POST"]`; all other CORS settings (origin, headers, credentials)
+unchanged.
+
+Verified against the real stack, in a real browser: all three labeling
+actions, each on a different transaction, now show `OPTIONS 200` /
+`POST 201` in the browser's own network trace, and the resulting label
+is confirmed persisted in Postgres with the correct `is_fraud`/`source`/
+`notes` values and reflected immediately in the UI.
+
+## Local end-to-end validation
+
+A full local validation pass (read-only except for the CORS fix above)
+confirmed the system end to end after the three changes above: all
+twelve Compose services healthy; a controlled `simulator.load` run
+(25s, concurrency 4) sent 219/219 transactions successfully through
+gateway -> Postgres -> feature-service/Redis -> model-service -> a real
+decision -> Postgres `Decision` row -> Kafka publish (0 failures) ->
+visible in `GET /v1/transactions` immediately, with risk scores spanning
+0.0004-0.983 and a single consistent model version across the run (no
+fallback-rule decisions); Prometheus scraping all four application
+targets as `up` with all five alert rules loaded; Grafana and
+Alertmanager both reachable; `services/simulator/load.py` and
+`ops/chaos/experiment.py` both confirmed present, syntactically valid,
+and runnable (neither executed destructively as part of this check).
+The one real defect found -- the CORS gap above -- was the only blocking
+issue; it is now fixed and re-verified.
+
+**Current deployment-readiness status**: the local Docker Compose stack
+is functionally complete and validated end to end, including the
+dashboard's full write path (labeling). The production EKS path
+described throughout this document remains exactly what it has always
+been: plan/validate-only, never applied, no AWS credentials used or
+required. Nothing in this section changes that.
+
 ## Current implementation status
 
 | Component | State |
@@ -562,7 +694,7 @@ or executed.
 | Observability (Prometheus/Grafana) | Implemented — `fraudguard_common.metrics` (framework-agnostic definitions), `GET /metrics` on all four services, Prometheus + Grafana in `docker-compose.yml`, dashboard and datasource provisioned as code under `ops/` (ADR-0010) |
 | Alerting (Alertmanager) | Implemented — `ops/alertmanager/` (null/log receiver, ADR-0013), five rules in `ops/prometheus/rules/fraudguard.rules.yml` covering the fallback rate, a new hot-path latency-budget-exceeded metric, service health, aggregator poison messages, and a new Kafka-publish-failure metric |
 | Transaction simulator | Implemented — `services/simulator` (`TransactionFactory` + `driver`, ADR-0011); black-box tests against the real, containerized gateway and feature-service (not in-process apps) verify the hot and cold paths end to end; CI's `integration` job now starts the full application tier, not just infrastructure |
-| Dashboard | Implemented — `dashboard/` (React + TypeScript, npm project outside the uv workspace, ADR-0003); gateway's new `GET /v1/transactions` (ADR-0012) serves a live-polling feed of transactions and decisions, unauthenticated by design |
+| Dashboard | Implemented — `dashboard/` (React + TypeScript, npm project outside the uv workspace, ADR-0003); redesigned into six pages (commit `c40179c`) reading the same `GET /v1/transactions` (ADR-0012) feed, unauthenticated by design; amounts display in INR, display-only (commit `2937489`) |
 | Labels | Implemented — `gateway/labels.py`'s `POST /v1/transactions/{id}/labels` (ADR-0014) writes to the previously-unused `labels` table (ADR-0005); `GET /v1/transactions` embeds each transaction's labels; `ml/pipelines/train.py` still trains on synthetic data only, unchanged |
 | Kubernetes / Terraform scaffolding | Implemented — `infra/terraform/` (a hand-written, plan/validate-only EKS cluster skeleton) and `infra/k8s/` (Deployment/Service manifests for the five application services, ADR-0016); no AWS credentials used, no `terraform apply`, no real cluster ever provisioned |
 | EKS node group scaffolding | Implemented — `infra/terraform/node_group.tf` (a plan/validate-only managed node group: worker IAM role + 3 required policy attachments + the node group itself, reusing Milestone 16's cluster and public subnets, ADR-0017); `main.tf` unmodified; no AWS credentials used, no `terraform apply`, no real node ever launched |
@@ -575,6 +707,10 @@ or executed.
 | Production secrets (External Secrets Operator) | Implemented — `infra/k8s/eso*.yaml` + `external-secret-*.yaml` + `secret-store.yaml`, `infra/terraform/eso_iam.tf` + `secrets_manager.tf` (Milestone 29); plan/validate-only, no real secret or AWS credentials used |
 | EKS load and chaos validation | Partially extended — `docs/runbooks/eks-load-and-chaos-validation.md` (Milestone 30, ADR-0019): `load.py` needs no change to target a real cluster; `ops/chaos/experiment.py`'s Docker-Compose coupling means fallback/Kafka chaos validation is *not* extended to EKS, a named, accepted gap |
 | CI/CD deployment pipeline | Implemented, not yet runnable — `.github/workflows/deploy.yml` (`workflow_dispatch`-only), `infra/terraform/ecr.tf` + `github_oidc.tf` (OIDC federation, two narrowly-scoped IAM roles, SHA-pinned images), Milestone 31, ADR-0020; no live GitHub Environment, no repository secrets, nothing ever applied or executed |
+| Model-service concurrency fix | Implemented — `num_threads=1` (`fraudguard_ml/model.py`) + `asyncio.to_thread()` (`model_service/scoring.py`), commit `6d805c7`; bounds but does not eliminate the hot-path p99 <= 100ms gap (Postgres + Kafka remain on the critical path) |
+| Dashboard redesign | Implemented — six pages (Overview/Transactions/Investigations/Models/Analytics/System Health), investigation drawer, new deps (`react-router-dom`, `recharts`, `lucide-react`), commit `c40179c`; no backend change |
+| INR display formatting | Implemented — `dashboard/src/lib/format.ts`, fixed display-only USD->INR rate, commit `2937489`; respects the API's own `currency` field, stored amounts unchanged |
+| Gateway CORS fix for label submission | Implemented — `allow_methods` widened to `["GET", "POST"]` (`services/gateway/src/gateway/app.py`), commit `794b26f`; closes a real browser-only gap present since Milestone 28, verified via live browser network trace + Postgres |
 
 ## Milestones
 
