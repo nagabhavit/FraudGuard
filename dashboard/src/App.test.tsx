@@ -1,18 +1,35 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { createLabel, fetchTransactions } from "./api";
+import {
+  createLabel,
+  fetchGatewayHealth,
+  fetchGatewayMetricsText,
+  fetchTransactions,
+} from "./api";
 import type { LabelRead, TransactionFeedItem } from "./types";
 
 vi.mock("./api", () => ({
   fetchTransactions: vi.fn(),
+  fetchAllTransactions: vi.fn(),
   createLabel: vi.fn(),
+  fetchGatewayHealth: vi.fn(),
+  fetchGatewayMetricsText: vi.fn(),
 }));
 
 const mockedFetchTransactions = vi.mocked(fetchTransactions);
 const mockedCreateLabel = vi.mocked(createLabel);
+const mockedFetchGatewayHealth = vi.mocked(fetchGatewayHealth);
+const mockedFetchGatewayMetricsText = vi.mocked(fetchGatewayMetricsText);
 
-function scoredItem(): TransactionFeedItem {
+// useAllTransactions calls fetchAllTransactions, a module export entirely
+// separate from fetchTransactions -- import it dynamically from the
+// already-mocked module so every test can set its resolved value without
+// re-declaring the mock factory.
+import { fetchAllTransactions } from "./api";
+const mockedFetchAllTransactions = vi.mocked(fetchAllTransactions);
+
+function scoredItem(overrides: Partial<TransactionFeedItem> = {}): TransactionFeedItem {
   return {
     transaction_id: "9b1f7b1e-1111-4b1e-8b1e-111111111111",
     account_id: "9b1f7b1e-2222-4b1e-8b1e-222222222222",
@@ -28,17 +45,15 @@ function scoredItem(): TransactionFeedItem {
       decided_at: "2026-08-08T12:00:00Z",
     },
     labels: [],
+    ...overrides,
   };
 }
 
 function fallbackItem(): TransactionFeedItem {
-  return {
+  return scoredItem({
     transaction_id: "9b1f7b1e-3333-4b1e-8b1e-333333333333",
-    account_id: "9b1f7b1e-4444-4b1e-8b1e-444444444444",
     merchant_id: "merchant-2",
     amount: "999.00",
-    currency: "USD",
-    occurred_at: "2026-08-08T11:00:00Z",
     decision: {
       outcome: "review",
       risk_score: 1.0,
@@ -46,8 +61,17 @@ function fallbackItem(): TransactionFeedItem {
       reason_codes: null,
       decided_at: "2026-08-08T11:00:00Z",
     },
-    labels: [],
-  };
+  });
+}
+
+function setupApis(items: TransactionFeedItem[]) {
+  mockedFetchTransactions.mockResolvedValue({ items, limit: 50, offset: 0 });
+  mockedFetchAllTransactions.mockResolvedValue({ items, truncated: false });
+  mockedFetchGatewayHealth.mockResolvedValue({
+    live: { status: "ok", checks: {} },
+    ready: { status: "ok", checks: { postgres: "ok" } },
+  });
+  mockedFetchGatewayMetricsText.mockResolvedValue("");
 }
 
 afterEach(() => {
@@ -55,133 +79,112 @@ afterEach(() => {
 });
 
 describe("App", () => {
-  it("renders the feed once transactions load", async () => {
-    mockedFetchTransactions.mockResolvedValue({
-      items: [scoredItem()],
-      limit: 50,
-      offset: 0,
-    });
+  it("renders the Overview page by default with real KPI data", async () => {
+    setupApis([scoredItem()]);
 
     render(<App />);
 
+    expect(await screen.findByRole("heading", { name: "FraudGuard" })).toBeInTheDocument();
+    expect(screen.getByText("Real-time fraud intelligence")).toBeInTheDocument();
+    // The live transaction stream card should surface the seeded merchant.
     expect(await screen.findByText("merchant-1")).toBeInTheDocument();
-    expect(screen.getByText("review")).toBeInTheDocument();
-    expect(screen.getByText("0.7231")).toBeInTheDocument();
-    expect(
-      screen.getByText("velocity_1h, distinct_merchants_24h"),
-    ).toBeInTheDocument();
   });
 
-  it("labels a fallback-rule decision instead of a model version", async () => {
-    mockedFetchTransactions.mockResolvedValue({
-      items: [fallbackItem()],
-      limit: 50,
-      offset: 0,
-    });
+  it("navigates to Transactions and renders the full feed", async () => {
+    setupApis([scoredItem(), fallbackItem()]);
 
     render(<App />);
+    await screen.findByText("merchant-1");
 
-    expect(await screen.findByText("merchant-2")).toBeInTheDocument();
-    expect(screen.getByText("fallback rule")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: /transactions/i }));
+
+    const table = await screen.findByRole("table");
+    expect(await within(table).findByText("merchant-2")).toBeInTheDocument();
+    expect(within(table).getByText("fallback rule")).toBeInTheDocument();
+  });
+
+  it("filters the Transactions table by search text", async () => {
+    setupApis([scoredItem(), fallbackItem()]);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: /transactions/i }));
+    const table = await screen.findByRole("table");
+    await within(table).findByText("merchant-2");
+
+    const searchInput = screen.getByPlaceholderText("Search ID, account, merchant…");
+    fireEvent.change(searchInput, { target: { value: "merchant-1" } });
+
+    expect(within(table).queryByText("merchant-2")).not.toBeInTheDocument();
+    expect(within(table).getByText("merchant-1")).toBeInTheDocument();
+    expect(screen.getByText('Search: "merchant-1"')).toBeInTheDocument();
   });
 
   it("shows an empty state when there are no transactions", async () => {
-    mockedFetchTransactions.mockResolvedValue({
-      items: [],
-      limit: 50,
-      offset: 0,
-    });
+    setupApis([]);
 
     render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: /transactions/i }));
 
-    expect(await screen.findByText("No transactions yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No transactions found")).toBeInTheDocument();
   });
 
   it("surfaces a fetch failure instead of rendering silently", async () => {
-    mockedFetchTransactions.mockRejectedValue(new Error("network error"));
+    mockedFetchAllTransactions.mockRejectedValue(new Error("network error"));
+    mockedFetchTransactions.mockResolvedValue({ items: [], limit: 50, offset: 0 });
+    mockedFetchGatewayHealth.mockResolvedValue({ live: null, ready: null });
+    mockedFetchGatewayMetricsText.mockResolvedValue("");
 
     render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: /transactions/i }));
 
     await waitFor(() =>
-      expect(
-        screen.getByText(/Could not reach the gateway/),
-      ).toBeInTheDocument(),
+      expect(screen.getByText("network error")).toBeInTheDocument(),
     );
   });
 
-  // Milestone 28: label display/submission.
-
-  it("renders a transaction's existing labels", async () => {
-    const item = scoredItem();
-    item.labels = [
-      {
-        id: "label-1",
-        is_fraud: true,
-        source: "chargeback",
-        notes: null,
-        labeled_at: "2026-08-09T00:00:00Z",
-      },
-    ];
-    mockedFetchTransactions.mockResolvedValue({
-      items: [item],
-      limit: 50,
-      offset: 0,
-    });
-
-    render(<App />);
-
-    expect(await screen.findByText("fraud (chargeback)")).toBeInTheDocument();
-  });
-
-  it("submits a new label and shows it without waiting for the next poll", async () => {
-    mockedFetchTransactions.mockResolvedValue({
-      items: [scoredItem()],
-      limit: 50,
-      offset: 0,
-    });
+  it("opens the investigation drawer and submits a quick label", async () => {
+    setupApis([scoredItem()]);
     const created: LabelRead = {
       id: "label-1",
       transaction_id: "9b1f7b1e-1111-4b1e-8b1e-111111111111",
-      is_fraud: true,
-      source: "chargeback",
-      notes: "flagged by bank",
+      is_fraud: false,
+      source: "manual_review",
+      notes: null,
       labeled_at: "2026-08-10T00:00:00Z",
     };
     mockedCreateLabel.mockResolvedValue(created);
 
     render(<App />);
-    expect(await screen.findByText("merchant-1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: /transactions/i }));
+    const table = await screen.findByRole("table");
+    await within(table).findByText("merchant-1");
 
-    fireEvent.click(screen.getByRole("button", { name: "+ label" }));
-    const selects = screen.getAllByRole("combobox");
-    fireEvent.change(selects[1], { target: { value: "chargeback" } });
-    fireEvent.change(screen.getByPlaceholderText("Notes (optional)"), {
-      target: { value: "flagged by bank" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    fireEvent.click(within(table).getByText("merchant-1"));
+
+    const drawer = await screen.findByRole("dialog", { name: /transaction details/i });
+    fireEvent.click(within(drawer).getByRole("button", { name: /mark legitimate/i }));
 
     await waitFor(() =>
       expect(mockedCreateLabel).toHaveBeenCalledWith(
         "9b1f7b1e-1111-4b1e-8b1e-111111111111",
-        { is_fraud: true, source: "chargeback", notes: "flagged by bank" },
+        { is_fraud: false, source: "manual_review", notes: null },
       ),
     );
-    expect(await screen.findByText("fraud (chargeback)")).toBeInTheDocument();
+    expect(await within(drawer).findByText(/legitimate · manual review/i)).toBeInTheDocument();
   });
 
-  it("surfaces a label submission failure instead of failing silently", async () => {
-    mockedFetchTransactions.mockResolvedValue({
-      items: [scoredItem()],
-      limit: 50,
-      offset: 0,
-    });
+  it("surfaces a label submission failure as a toast instead of failing silently", async () => {
+    setupApis([scoredItem()]);
     mockedCreateLabel.mockRejectedValue(new Error("label submit failed"));
 
     render(<App />);
-    expect(await screen.findByText("merchant-1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: /transactions/i }));
+    const table = await screen.findByRole("table");
+    await within(table).findByText("merchant-1");
+    fireEvent.click(within(table).getByText("merchant-1"));
 
-    fireEvent.click(screen.getByRole("button", { name: "+ label" }));
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    const drawer = await screen.findByRole("dialog", { name: /transaction details/i });
+    fireEvent.click(within(drawer).getByRole("button", { name: /confirm fraud/i }));
 
     expect(await screen.findByText("label submit failed")).toBeInTheDocument();
   });

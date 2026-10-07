@@ -57,3 +57,28 @@ export interface TransactionFeedPage {
   limit: number;
   offset: number;
 }
+
+// Mirrors gateway's HealthStatus (services/gateway/src/gateway/health.py) --
+// GET /health/live and /health/ready both return this shape.
+export interface HealthStatus {
+  status: "ok" | "error";
+  checks: Record<string, string>;
+}
+
+// The known, fixed feature schema model-service scores against
+// (libs/fraudguard-ml/src/fraudguard_ml/features.py, FEATURE_NAMES) --
+// a true static fact about the running system, not an API response and
+// not fabricated data. Used only for display/explanation, never as a
+// stand-in for a metric no endpoint actually exposes.
+export const KNOWN_FEATURE_NAMES = [
+  "amount",
+  "velocity_1m",
+  "velocity_1h",
+  "velocity_24h",
+  "distinct_merchants_24h",
+] as const;
+
+// model-service/settings.py's real, fixed decision thresholds (not a UI
+// invention): risk_score < 0.3 -> approve, > 0.7 -> decline, else review.
+export const RISK_APPROVE_BELOW = 0.3;
+export const RISK_DECLINE_ABOVE = 0.7;
