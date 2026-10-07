@@ -1,3 +1,4 @@
+import { convertUsdToInr } from "./format";
 import type { TransactionFeedItem } from "../types";
 
 export type TimeRange = "24h" | "7d" | "30d";
@@ -73,13 +74,21 @@ export interface AmountBucket {
   count: number;
 }
 
-const AMOUNT_BUCKET_EDGES = [0, 10, 25, 50, 100, 250, 500, 1000, Infinity];
+// INR-denominated bucket edges for the demo's display currency (see
+// lib/format.ts's USD_TO_INR_DISPLAY_RATE) -- round thousands rather than
+// an exact rate-multiple of the old $0/10/25/50/100/250/500/1000 edges,
+// kept proportionally similar so the histogram's shape is unchanged.
+const AMOUNT_BUCKET_EDGES = [0, 1000, 2500, 5000, 10000, 25000, 50000, 100000, Infinity];
+
+function formatInrLabel(value: number): string {
+  return `₹${new Intl.NumberFormat("en-IN").format(value)}`;
+}
 
 export function bucketByAmount(items: TransactionFeedItem[]): AmountBucket[] {
   const buckets = AMOUNT_BUCKET_EDGES.slice(0, -1).map((edge, i) => {
     const next = AMOUNT_BUCKET_EDGES[i + 1];
     return {
-      label: next === Infinity ? `$${edge}+` : `$${edge}–${next}`,
+      label: next === Infinity ? `${formatInrLabel(edge)}+` : `${formatInrLabel(edge)}–${formatInrLabel(next)}`,
       min: edge,
       max: next,
       count: 0,
@@ -87,7 +96,8 @@ export function bucketByAmount(items: TransactionFeedItem[]): AmountBucket[] {
   });
 
   for (const item of items) {
-    const amount = Number(item.amount);
+    const rawAmount = Number(item.amount);
+    const amount = item.currency === "USD" ? convertUsdToInr(rawAmount) : rawAmount;
     const bucket = buckets.find((b) => amount >= b.min && amount < b.max);
     if (bucket) bucket.count += 1;
   }

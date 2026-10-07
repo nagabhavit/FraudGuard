@@ -19,7 +19,7 @@ import { TransactionsTable } from "../components/transactions/TransactionsTable"
 import { useAllTransactions } from "../hooks/useAllTransactions";
 import { useGatewayPulse } from "../hooks/useGatewayPulse";
 import { useLiveTransactions } from "../hooks/useLiveTransactions";
-import { formatCount, formatPercent } from "../lib/format";
+import { formatCount, formatPercent, formatUsdSumAsInr } from "../lib/format";
 import { RISK_TIER_LABEL, riskTierFor, type RiskTier } from "../lib/risk";
 import type { LabelSummary, TransactionFeedItem } from "../types";
 
@@ -200,9 +200,7 @@ export function OverviewPage() {
         <StatCard
           label="Transaction volume"
           icon={<Banknote size={16} />}
-          value={new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(
-            kpis.volume,
-          )}
+          value={formatUsdSumAsInr(kpis.volume)}
           meta="sum of amounts"
           loading={all.loading}
         />

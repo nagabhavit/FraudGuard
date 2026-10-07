@@ -83,7 +83,9 @@ export function TransactionDrawer({
               </Field>
               <Field label="Merchant">{item.merchant_id}</Field>
               <Field label="Amount">{formatAmount(item.amount, item.currency)}</Field>
-              <Field label="Currency">{item.currency}</Field>
+              <Field label="Currency">
+                {item.currency === "USD" ? "INR (converted from USD for display)" : item.currency}
+              </Field>
               <Field label="Occurred at">{formatDateTime(item.occurred_at)}</Field>
               <Field label="Decided at">{decision ? formatDateTime(decision.decided_at) : "—"}</Field>
             </div>
